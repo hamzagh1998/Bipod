@@ -1,0 +1,50 @@
+services:
+  ollama:
+    image: ollama/ollama:latest
+    container_name: bipod_ollama
+    restart: unless-stopped
+    volumes:
+      - ./data/ollama:/root/.ollama
+    ports:
+      - "11434:11434"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  bipod-app:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.app
+    container_name: bipod_brain
+    restart: unless-stopped
+    depends_on:
+      - ollama
+    ports:
+      - "8000:8000"
+    environment:
+      - OLLAMA_BASE_URL=http://ollama:11434
+      - PYTHON_JIT=${PYTHON_JIT:-on}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    devices:
+      - "/dev/snd:/dev/snd"
+      - "/dev/video0:/dev/video0"
+    group_add:
+      - audio
+      - video
+    volumes:
+      - ./app:/app/app
+      - ./data:/app/data
+
+networks:
+  default:
+    name: bipod-network

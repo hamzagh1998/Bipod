@@ -1,0 +1,40 @@
+# --- AI & Robotics Specific ---
+# Temporary images from the camera (e.g., vision_temp.jpg)
+*_temp.jpg
+*_capture.png
+
+# Local Audio recordings/transcriptions
+*.wav
+*.mp3
+captures/
+
+# Model Weights (If you download models manually instead of using Ollama volumes)
+models/
+*.bin
+*.onnx
+
+# --- Environment & Secrets ---
+.env
+.env.local
+.venv/
+env/
+venv/
+
+# --- Docker ---
+# Ignore the actual data stored in your Ollama volume if mapped locally
+.ollama_data/
+data/
+
+# --- Python Standard ---
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+*.log
+
+# --- OS Specific ---
+.DS_Store
+Thumbs.db
+
+# --- Local Debug ---
+firebase-debug.log

@@ -1,0 +1,38 @@
+# Multi-arch support is inherent in python:3.14-slim (amd64/arm64)
+FROM python:3.14-slim
+
+# Weightless Intelligence: Environment configuration
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+ENV PYTHON_JIT=on
+
+# Install system dependencies for Audio (Whisper/VAD) and Vision (OpenCV)
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    cmake \
+    git \
+    libasound2-dev \
+    libportaudio2 \
+    portaudio19-dev \
+    libgl1 \
+    libglib2.0-0 \
+    ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Upgrade pip and install dependencies
+RUN pip install --no-cache-dir --upgrade pip
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy application logic
+COPY ./app ./app
+
+# Metadata and Data volumes
+VOLUME ["/app/data"]
+
+EXPOSE 8000
+
+# Start with JIT enabled
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
