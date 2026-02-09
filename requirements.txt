@@ -5,4 +5,5 @@ langchain
 langchain-community
 faster-whisper
 python-multipart
+httpx
 # Add other dependencies as needed for vision/ollama-client

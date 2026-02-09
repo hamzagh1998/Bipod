@@ -44,6 +44,9 @@ class Settings(BaseSettings):
     # Use /app/data if inside container, else local ./data
     DATA_DIR: str = "/app/data" if os.path.exists("/app") else os.path.join(os.getcwd(), "data")
     
+    # Root of the host filesystem (mapped via Docker)
+    HOST_ROOT: str = "/host" if os.path.exists("/host") else "/"
+
     @computed_field
     @property
     def DOCUMENTS_DIR(self) -> str:

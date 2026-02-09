@@ -44,6 +44,7 @@ services:
     volumes:
       - ./app:/app/app
       - ./data:/app/data
+      - /:/host:ro
 
 networks:
   default:
