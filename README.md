@@ -82,9 +82,35 @@ Bipod uses a **Sidecar Pattern**, separating the Inference Server (Ollama) from 
    docker compose up -d
    ```
 3. **Check the logs:**
+
    ```bash
+
    docker compose logs -f
    ```
+
+   ```
+
+   ```
+
+## 🧠 Required Models
+
+Bipod uses different models based on the selected tier and capabilities. You must pull these models into the Ollama container for them to work.
+
+Run the following command to install all standard models:
+
+```bash
+# Heavy Tier (GPU / High-End CPU)
+docker exec -it bipod_ollama ollama pull llama3.1:8b
+
+# Medium Tier (Standard CPU)
+docker exec -it bipod_ollama ollama pull llama3.2:3b
+
+# Light Tier (Edge / Low Resource)
+docker exec -it bipod_ollama ollama pull llama3.2:1b
+
+# Vision Capabilities (Image Analysis)
+docker exec -it bipod_ollama ollama pull moondream
+```
 
 ## 🔋 Edge Device Support (Raspberry Pi)
 

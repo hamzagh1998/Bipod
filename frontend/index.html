@@ -31,40 +31,13 @@
       <aside id="sidebar" class="sidebar">
         <div class="sidebar-header">
           <div class="brand-row">
-            <!-- Inline SVG Bipod Logo -->
-            <svg
+            <img
+              src="static/logo.png"
+              alt="Bipod"
+              width="28"
+              height="28"
               class="bipod-logo"
-              viewBox="0 0 36 36"
-              width="32"
-              height="32"
-              fill="none"
-              xmlns="http://www.w3.org/2000/svg"
-            >
-              <defs>
-                <linearGradient
-                  id="logo-grad"
-                  x1="0%"
-                  y1="0%"
-                  x2="100%"
-                  y2="100%"
-                >
-                  <stop offset="0%" style="stop-color: #8a2be2" />
-                  <stop offset="100%" style="stop-color: #a855f7" />
-                </linearGradient>
-              </defs>
-              <rect width="36" height="36" rx="8" fill="url(#logo-grad)" />
-              <path
-                d="M11 8h6a5 5 0 0 1 0 10h-6V8zm2 3v4h4a2 2 0 1 0 0-4h-4z"
-                fill="white"
-              />
-              <path
-                d="M11 18h6a5 5 0 0 1 0 10h-6V18zm2 3v4h4a2 2 0 1 0 0-4h-4z"
-                fill="white"
-                opacity="0.7"
-              />
-              <circle cx="27" cy="13" r="3" fill="white" opacity="0.5" />
-              <circle cx="27" cy="23" r="2" fill="white" opacity="0.3" />
-            </svg>
+            />
             <span class="brand-name">Bipod</span>
           </div>
           <button id="new-chat-btn" class="btn-primary">
@@ -78,85 +51,186 @@
         <div id="history-container" class="history-container">
           <!-- History items will be injected here -->
         </div>
+
+        <div class="sidebar-footer">
+          <div class="user-info" id="user-info">
+            <span id="current-username">Guest</span>
+            <button id="logout-btn" class="icon-btn" title="Logout">
+              <span class="material-symbols-rounded">logout</span>
+            </button>
+          </div>
+          <div class="footer-links">
+            <a href="#">Settings</a>
+            <a href="#">Help</a>
+          </div>
+        </div>
       </aside>
       <div id="sidebar-overlay" class="sidebar-overlay"></div>
 
       <div class="main-chat">
+        <!-- Auth Overlay -->
+        <div id="auth-overlay" class="auth-overlay">
+          <div class="auth-card glass">
+            <img src="static/logo.png" alt="Bipod" width="60" height="60" />
+            <h2>Welcome to Bipod</h2>
+            <p>Self-Sovereign intelligence, locally served.</p>
+
+            <div id="auth-form-container">
+              <form id="login-form">
+                <div class="input-group">
+                  <label>Username</label>
+                  <input
+                    type="text"
+                    id="login-username"
+                    required
+                    placeholder="Enter username"
+                  />
+                </div>
+                <div class="input-group">
+                  <label>Password</label>
+                  <input
+                    type="password"
+                    id="login-password"
+                    required
+                    placeholder="Enter password"
+                  />
+                </div>
+                <button type="submit" class="auth-submit">Login</button>
+                <p class="auth-switch">
+                  Don't have an account? <a href="#" id="to-signup">Sign Up</a>
+                </p>
+              </form>
+
+              <form id="signup-form" class="hidden">
+                <div class="input-group">
+                  <label>Username</label>
+                  <input
+                    type="text"
+                    id="signup-username"
+                    required
+                    placeholder="Choose username"
+                  />
+                </div>
+                <div class="input-group">
+                  <label>Password</label>
+                  <input
+                    type="password"
+                    id="signup-password"
+                    required
+                    placeholder="Create password"
+                  />
+                </div>
+                <button type="submit" class="auth-submit">
+                  Create Account
+                </button>
+                <p class="auth-switch">
+                  Already have an account? <a href="#" id="to-login">Login</a>
+                </p>
+              </form>
+            </div>
+          </div>
+        </div>
+
         <header>
           <div class="header-left">
             <button id="sidebar-toggle" class="icon-btn" title="Toggle Sidebar">
               <span class="material-symbols-rounded">menu</span>
             </button>
-            <h1 id="chat-title">Bipod</h1>
+            <h1 id="chat-title">New Chat</h1>
           </div>
-          <div class="header-actions">
-            <div class="status-badge online">
-              <span class="status-dot"></span>
-              <span id="connection-status">Online</span>
+          <div class="header-right">
+            <div class="status-badge">
+              <div class="status-dot"></div>
+              <span>Online</span>
             </div>
           </div>
         </header>
 
-        <main id="chat-window">
-          <div id="welcome-hero" class="welcome-hero">
-            <svg
+        <div id="chat-window">
+          <!-- Welcome Hero -->
+          <div class="welcome-hero" id="welcome-hero">
+            <img
+              src="static/logo.png"
+              alt="Bipod"
+              width="80"
+              height="80"
               class="welcome-logo"
-              viewBox="0 0 36 36"
-              width="56"
-              height="56"
-              fill="none"
-              xmlns="http://www.w3.org/2000/svg"
-            >
-              <defs>
-                <linearGradient
-                  id="welcome-grad"
-                  x1="0%"
-                  y1="0%"
-                  x2="100%"
-                  y2="100%"
-                >
-                  <stop offset="0%" style="stop-color: #8a2be2" />
-                  <stop offset="100%" style="stop-color: #a855f7" />
-                </linearGradient>
-              </defs>
-              <rect width="36" height="36" rx="8" fill="url(#welcome-grad)" />
-              <path
-                d="M11 8h6a5 5 0 0 1 0 10h-6V8zm2 3v4h4a2 2 0 1 0 0-4h-4z"
-                fill="white"
-              />
-              <path
-                d="M11 18h6a5 5 0 0 1 0 10h-6V18zm2 3v4h4a2 2 0 1 0 0-4h-4z"
-                fill="white"
-                opacity="0.7"
-              />
-              <circle cx="27" cy="13" r="3" fill="white" opacity="0.5" />
-              <circle cx="27" cy="23" r="2" fill="white" opacity="0.3" />
-            </svg>
-            <h2>Welcome to Bipod</h2>
-            <p>Your local, weightless AI companion. Private by design.</p>
+            />
+            <h2>How can I help you today?</h2>
+            <p>
+              Bipod is your local AI companion. Attached files and images never
+              leave your machine.
+            </p>
           </div>
-          <div id="loading-indicator" class="message ai hidden">
-            <div class="message-content">
-              <div class="typing-indicator">
-                <span></span>
-                <span></span>
-                <span></span>
-              </div>
-            </div>
+          <!-- Messages will be injected here -->
+          <div id="loading-indicator" class="typing-indicator hidden">
+            <span></span><span></span><span></span>
           </div>
-        </main>
+        </div>
 
         <footer>
           <form id="chat-form">
-            <textarea
-              id="user-input"
-              placeholder="Message Bipod..."
-              rows="1"
-              autocomplete="off"
-            ></textarea>
-            <button type="submit" id="send-btn" title="Send message">
-              <span class="material-symbols-rounded">arrow_upward</span>
-            </button>
+            <div
+              id="image-preview-container"
+              class="image-preview-container"
+            ></div>
+            <div class="input-row">
+              <div class="input-actions-group">
+                <div class="brain-settings input-mode">
+                  <button
+                    type="button"
+                    id="brain-settings-btn"
+                    class="icon-btn"
+                    title="Brain Settings"
+                  >
+                    <span class="material-symbols-rounded">add_circle</span>
+                  </button>
+                  <div id="brain-settings-panel" class="settings-panel">
+                    <h3>Brain Config</h3>
+                    <div class="setting-group">
+                      <label for="model-select">Model Tier</label>
+                      <select id="model-select">
+                        <option value="llama3.2:3b">Medium (3b)</option>
+                        <option value="llama3.1:8b">Heavy (8b)</option>
+                        <option value="llama3.2:1b">Light (1b)</option>
+                      </select>
+                    </div>
+                    <div class="setting-group">
+                      <label for="mode-select">Reasoning Mode</label>
+                      <select id="mode-select">
+                        <option value="normal" selected>Normal</option>
+                        <option value="deep">Deep Think</option>
+                        <option value="precise">Precise</option>
+                      </select>
+                    </div>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  id="attach-btn"
+                  class="icon-btn"
+                  title="Attach Image"
+                >
+                  <span class="material-symbols-rounded">attach_file</span>
+                </button>
+                <input
+                  type="file"
+                  id="image-upload"
+                  accept="image/*"
+                  multiple
+                  style="display: none"
+                />
+              </div>
+              <textarea
+                id="user-input"
+                placeholder="Message Bipod..."
+                rows="1"
+                autocomplete="off"
+              ></textarea>
+              <button type="submit" id="send-btn" title="Send message">
+                <span class="material-symbols-rounded">arrow_upward</span>
+              </button>
+            </div>
           </form>
           <div class="footer-hint">
             Bipod runs entirely on your machine. Your data never leaves.

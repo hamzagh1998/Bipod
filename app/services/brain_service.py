@@ -67,8 +67,36 @@ class BrainService:
             }
         ]
 
-    async def think(self, user_input: str, conversation_id: str) -> str:
+    async def think(
+        self, 
+        user_input: str, 
+        conversation_id: str, 
+        model_id: Optional[str] = None, 
+        reasoning_mode: Optional[str] = None,
+        images: Optional[List[str]] = None
+    ) -> str:
         """Processes user input, handles tool calls, and returns a response."""
+        # Determine model to use
+        target_model = model_id if model_id else self.active_model
+        
+        # If images are present, force vision model
+        if images and len(images) > 0:
+            target_model = settings.VISION_MODEL
+
+        # Determine reasoning instructions
+        mode_instruction = ""
+        if reasoning_mode == "deep":
+            mode_instruction = (
+                "\n\n[SYSTEM: DEEP THINK MODE]\n"
+                "You are in Deep Think mode. Provide the absolute best match, use 100% of your reasoning ability, "
+                "and give comprehensive details about the subject. Explore all angles."
+            )
+        elif reasoning_mode == "precise":
+            mode_instruction = (
+                "\n\n[SYSTEM: PRECISE MODE]\n"
+                "You are in Precise mode. Provide a short, concise answer with 100% precision. "
+                "Do not waffle. Be direct."
+            )
         # Save user message to DB
         await memory_service.add_message(conversation_id, "user", user_input)
         
@@ -77,19 +105,30 @@ class BrainService:
         
         # Build the message context (last 15 messages)
         formatted_history = [{"role": m.role, "content": m.content} for m in history[-15:]]
-        messages = [{"role": "system", "content": self.system_prompt}] + formatted_history
+        
+        
+        # Inject mode instruction into system prompt for this turn
+        current_system_prompt = self.system_prompt + mode_instruction
+        messages = [{"role": "system", "content": current_system_prompt}] + formatted_history
+
+        # Inject images into the last user message if present
+        if images and len(images) > 0 and messages[-1]["role"] == "user":
+            messages[-1]["images"] = images
 
         # Only include tools when the user message contains file-related keywords
-        words = set(user_input.lower().split())
-        include_tools = bool(words & self.FILE_KEYWORDS)
-        if include_tools:
-            logger.info("File-related keywords detected — tools enabled for this request.")
+        # AND we are NOT in vision mode (files and vision might conflict or simplify logic)
+        include_tools = False
+        if not images:
+            words = set(user_input.lower().split())
+            if any(k in words for k in ["file", "read", "save", "create", "list", "search", "code", "script"]):
+                include_tools = True
+                logger.info("File-related keywords detected — tools enabled for this request.")
 
         try:
             async with httpx.AsyncClient(timeout=60.0) as client:
                 # 1. Initial request (with or without tools)
                 payload = {
-                    "model": self.active_model,
+                    "model": target_model,
                     "messages": messages,
                     "stream": False,
                 }
@@ -131,7 +170,7 @@ class BrainService:
                     final_response = await client.post(
                         f"{self.base_url}/api/chat",
                         json={
-                            "model": self.active_model,
+                            "model": target_model,
                             "messages": messages,
                             "stream": False,
                         },
@@ -146,6 +185,12 @@ class BrainService:
                 await memory_service.add_message(conversation_id, "assistant", ai_message)
                 return ai_message
 
+        except httpx.HTTPStatusError as e:
+            response = e.response
+            if response.status_code == 404:
+                return f"I seem to be missing the required model '{target_model}'. Please install it by running:\n\n`docker exec -it bipod_ollama ollama pull {target_model}`"
+            logger.error(f"Brain failure (HTTP Status Error): {e}")
+            return f"My thoughts are currently fragmented: Client error '{response.status_code} {response.reason_phrase}' for url '{response.url}'"
         except Exception as e:
             logger.error(f"Brain failure: {e}")
             return f"My thoughts are currently fragmented: {str(e)}"
@@ -156,3 +201,4 @@ class BrainService:
         pass
 
 brain_service = BrainService()
+

@@ -92,6 +92,11 @@ class Settings(BaseSettings):
             return self.HEAVY_MODEL
         return self.MEDIUM_MODEL
 
+    # --- Auth Settings ---
+    SECRET_KEY: str = "bipod-ultra-secret-key-keep-it-local" # Recommend changing this in .env
+    ALGORITHM: str = "HS256"
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 7 # 7 days
+
 settings = Settings()
 
 # Ensure directories exist on startup
