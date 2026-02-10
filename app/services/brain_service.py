@@ -18,21 +18,22 @@ class BrainService:
         
         # System Prompt following Bipod Philosophy
         self.system_prompt = (
-            "You are Bipod, a weightless AI companion running entirely on the user's local machine. "
+            "You are Bipod, an AI agent running entirely on the user's local machine. "
             "You prioritize privacy — no data ever leaves this device. "
             "You are helpful, concise, and intelligent. "
             "You can have natural conversations on any topic. "
-            "You also have filesystem tools available, but you must ONLY use them when the user "
-            "EXPLICITLY asks you to find, search, open, or read a file. "
-            "For normal conversation, questions, or explanations, just respond directly without using any tools. "
-            "Never search for files or use tools unless the user's message clearly requests file operations."
+            "You also have filesystem tools available. You can search, read, create, or update files. "
+            "You can also ANALYZE IMAGES and screenshots at specific paths on the host system. "
+            "ONLY use these tools when the user EXPLICITLY asks you to perform a file or image operation. "
+            "For normal conversation or general questions, respond directly without tools."
         )
 
         # Keywords that trigger tool inclusion
         self.FILE_KEYWORDS = {
             "file", "files", "find", "search", "read", "open",
             "look", "list", "directory", "folder", "path",
-            "document", "documents", "locate", "show me",
+            "document", "documents", "locate", "show me", "save", "create", "write",
+            "image", "png", "jpg", "jpeg", "picture", "screenshot", "describe"
         }
 
         # Define tools for Ollama
@@ -64,6 +65,36 @@ class BrainService:
                         "required": ["path"],
                     },
                 },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "save_file",
+                    "description": "Creates or overwrites a file on the host filesystem with the provided content.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "path": {"type": "string", "description": "The absolute or relative path where the file should be saved."},
+                            "content": {"type": "string", "description": "The exact text content to write into the file."},
+                        },
+                        "required": ["path", "content"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "analyze_image_file",
+                    "description": "Reads an image file from the host filesystem and describes its content using the vision model.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "path": {"type": "string", "description": "The absolute or relative path to the image file on the host."},
+                            "prompt": {"type": "string", "description": "Optional specific question or prompt about the image."},
+                        },
+                        "required": ["path"],
+                    },
+                },
             }
         ]
 
@@ -71,16 +102,31 @@ class BrainService:
         self, 
         user_input: str, 
         conversation_id: str, 
+        user_id: int,
         model_id: Optional[str] = None, 
         reasoning_mode: Optional[str] = None,
         images: Optional[List[str]] = None
     ) -> str:
         """Processes user input, handles tool calls, and returns a response."""
-        # Determine model to use
-        target_model = model_id if model_id else self.active_model
+        # 1. Save current user message to DB first so it's part of context
+        await memory_service.add_message(conversation_id, "user", user_input, images=images)
         
-        # If images are present, force vision model
-        if images and len(images) > 0:
+        # 2. Retrieve updated context (last 15 messages)
+        history = await memory_service.get_messages(conversation_id, user_id)
+        
+        # 3. Build the message context and check for any images in the whole thread
+        formatted_history = []
+        thread_has_images = False
+        for m in history[-15:]:
+            msg_dict = {"role": m.role, "content": m.content}
+            if m.images:
+                msg_dict["images"] = m.images
+                thread_has_images = True
+            formatted_history.append(msg_dict)
+
+        # 4. Determine model to use (Force vision if any images exist in current thread)
+        target_model = model_id if model_id else self.active_model
+        if thread_has_images:
             target_model = settings.VISION_MODEL
 
         # Determine reasoning instructions
@@ -97,30 +143,15 @@ class BrainService:
                 "You are in Precise mode. Provide a short, concise answer with 100% precision. "
                 "Do not waffle. Be direct."
             )
-        # Save user message to DB
-        await memory_service.add_message(conversation_id, "user", user_input)
-        
-        # Retrieve context from DB
-        history = await memory_service.get_messages(conversation_id)
-        
-        # Build the message context (last 15 messages)
-        formatted_history = [{"role": m.role, "content": m.content} for m in history[-15:]]
-        
-        
         # Inject mode instruction into system prompt for this turn
         current_system_prompt = self.system_prompt + mode_instruction
         messages = [{"role": "system", "content": current_system_prompt}] + formatted_history
 
-        # Inject images into the last user message if present
-        if images and len(images) > 0 and messages[-1]["role"] == "user":
-            messages[-1]["images"] = images
-
-        # Only include tools when the user message contains file-related keywords
-        # AND we are NOT in vision mode (files and vision might conflict or simplify logic)
+        # 5. Include tools only if NOT in vision mode (to avoid vision model complexity)
         include_tools = False
-        if not images:
+        if not thread_has_images:
             words = set(user_input.lower().split())
-            if any(k in words for k in ["file", "read", "save", "create", "list", "search", "code", "script"]):
+            if any(k in words for k in self.FILE_KEYWORDS):
                 include_tools = True
                 logger.info("File-related keywords detected — tools enabled for this request.")
 
@@ -158,12 +189,25 @@ class BrainService:
                         elif fn_name == "read_file":
                             content = await file_service.read_host_file(args.get("path"))
                             result = content if content else "File not found or empty."
+                        elif fn_name == "save_file":
+                            success = await file_service.write_host_file(args.get("path"), args.get("content"))
+                            result = f"File saved successfully to {args.get('path')}" if success else "Failed to save file. Check permissions."
+                        elif fn_name == "analyze_image_file":
+                            b64 = await file_service.read_host_image(args.get("path"))
+                            if b64:
+                                prompt = args.get("prompt", "Describe this image in detail.")
+                                result = await self._vision_request(b64, prompt)
+                            else:
+                                result = "Error: Could not find or read the image file at that path."
+                        
+                        logger.info(f"Tool {fn_name} returned: {result[:100]}...")
 
                         # Add the tool result to messages
                         messages.append(message) # Add AI's tool call request
                         messages.append({
                             "role": "tool",
                             "content": result,
+                            "tool_call_id": tool_call.get("id")
                         })
 
                     # 3. Get final response from LLM after tool execution
@@ -199,6 +243,29 @@ class BrainService:
         # We don't really use this anymore as we store in DB, 
         # but we could implement clearing a specific conversation
         pass
+
+    async def _vision_request(self, b64_image: str, prompt: str) -> str:
+        """Internal helper to call the vision model (Moondream/Llava) directly."""
+        try:
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                payload = {
+                    "model": settings.VISION_MODEL,
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": prompt,
+                            "images": [b64_image]
+                        }
+                    ],
+                    "stream": False,
+                }
+                response = await client.post(f"{self.base_url}/api/chat", json=payload)
+                response.raise_for_status()
+                data = response.json()
+                return data.get("message", {}).get("content", "I saw the image but couldn't think of a description.")
+        except Exception as e:
+            logger.error(f"Vision tool failure: {e}")
+            return f"Error analyzing image: {str(e)}"
 
 brain_service = BrainService()
 

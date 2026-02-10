@@ -45,7 +45,7 @@ services:
       - ./app:/app/app
       - ./frontend:/app/frontend
       - ./data:/app/data
-      - /:/host:ro
+      - /:/host:rw
 
 networks:
   default:

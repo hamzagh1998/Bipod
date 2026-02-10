@@ -4,6 +4,7 @@ from typing import List, Optional
 from sqlalchemy import select, update, delete
 from app.db.database import AsyncSessionLocal
 from app.db.models import Conversation, Message, User
+from app.core.logger import get_logger
 
 logger = get_logger("bipod.services.memory")
 
@@ -15,9 +16,13 @@ class MemoryService:
 
     # --- User Operations ---
     async def get_user_by_username(self, username: str) -> Optional[User]:
+        logger.info(f"Fetching user by username: {username}")
         async with AsyncSessionLocal() as session:
             result = await session.execute(select(User).where(User.username == username))
-            return result.scalar_one_or_none()
+            user = result.scalar_one_or_none()
+            if not user:
+                logger.warning(f"User not found with username: {username}")
+            return user
 
     async def get_user_by_id(self, user_id: int) -> Optional[User]:
         async with AsyncSessionLocal() as session:
@@ -35,6 +40,7 @@ class MemoryService:
     # --- Conversation Operations ---
     async def create_conversation(self, user_id: int, title: str = "New Conversation") -> str:
         conv_id = str(uuid.uuid4())
+        logger.info(f"Creating new conversation: {conv_id} for user_id: {user_id}")
         async with AsyncSessionLocal() as session:
             new_conv = Conversation(id=conv_id, title=title, user_id=user_id)
             session.add(new_conv)
@@ -42,13 +48,16 @@ class MemoryService:
             return conv_id
 
     async def get_conversations(self, user_id: int) -> List[Conversation]:
+        logger.info(f"Listing conversations for user_id: {user_id}")
         async with AsyncSessionLocal() as session:
             result = await session.execute(
                 select(Conversation)
                 .where(Conversation.user_id == user_id)
                 .order_by(Conversation.created_at.desc())
             )
-            return result.scalars().all()
+            convs = result.scalars().all()
+            logger.info(f"Found {len(convs)} conversations for user: {user_id}")
+            return convs
 
     async def get_conversation(self, conv_id: str, user_id: int) -> Optional[Conversation]:
         async with AsyncSessionLocal() as session:
@@ -95,10 +104,10 @@ class MemoryService:
             )
             await session.commit()
 
-    async def add_message(self, conv_id: str, role: str, content: str):
+    async def add_message(self, conv_id: str, role: str, content: str, images: Optional[List[str]] = None):
         # We don't check user_id here as the chat flow checks it before calling add_message
         async with AsyncSessionLocal() as session:
-            new_msg = Message(conversation_id=conv_id, role=role, content=content)
+            new_msg = Message(conversation_id=conv_id, role=role, content=content, images=images)
             session.add(new_msg)
             await session.commit()
 

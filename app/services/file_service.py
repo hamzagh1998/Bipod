@@ -48,4 +48,32 @@ class FileService:
             logger.error(f"Failed to read host file {path}: {e}")
             return None
 
+    async def read_host_image(self, path: str) -> Optional[str]:
+        """Reads an image file from the host system and returns its base64 encoding."""
+        try:
+            import base64
+            full_path = self.get_host_path(path)
+            if not os.path.exists(full_path):
+                return None
+            
+            with open(full_path, 'rb') as f:
+                content = f.read()
+                return base64.b64encode(content).decode('utf-8')
+        except Exception as e:
+            logger.error(f"Failed to read image file {path}: {e}")
+            return None
+
+    async def write_host_file(self, path: str, content: str) -> bool:
+        """Writes content to a file on the host system."""
+        try:
+            full_path = self.get_host_path(path)
+            # Ensure directory exists
+            os.makedirs(os.path.dirname(full_path), exist_ok=True)
+            with open(full_path, 'w', encoding='utf-8') as f:
+                f.write(content)
+            return True
+        except Exception as e:
+            logger.error(f"Failed to write host file {path}: {e}")
+            return False
+
 file_service = FileService()

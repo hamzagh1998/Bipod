@@ -1,40 +1,21 @@
 from fastapi import APIRouter, HTTPException, Body, Depends, Security
-from pydantic import BaseModel
 from typing import List, Optional
 from app.services.brain_service import brain_service
 from app.services.memory_service import memory_service
 from app.services.auth_service import auth_service
+from app.api.schemas import * # We'll use specific imports below to be safe
 
 router = APIRouter()
 
 # --- Auth Models ---
-class UserAuth(BaseModel):
-    username: str
-    password: str
+from app.api.schemas import (
+    UserAuth, Token, UserResponse, ConversationResponse, MessageResponse,
+    ChatRequest, ChatResponse, ConversationUpdate, ArchiveUnlock
+)
 
-class Token(BaseModel):
-    access_token: str
-    token_type: str = "bearer"
-
-# --- Chat Models ---
-class ChatRequest(BaseModel):
-    message: str
-    conversation_id: str
-    model_id: Optional[str] = None
-    reasoning_mode: Optional[str] = None
-    images: Optional[List[str]] = None
-
-class ChatResponse(BaseModel):
-    response: str
-    status: str = "success"
-
-class ConversationUpdate(BaseModel):
-    title: Optional[str] = None
-    is_archived: Optional[bool] = None
-    password: Optional[str] = None
-
-class ArchiveUnlock(BaseModel):
-    password: str
+@router.get("/health")
+async def health_check():
+    return {"status": "ok", "message": "Bipod's nervous system is functional."}
 
 # --- Auth Endpoints ---
 @router.post("/auth/signup", response_model=Token)
@@ -66,7 +47,7 @@ async def get_me(current_user_id: int = Depends(auth_service.get_current_user)):
     return {"id": user.id, "username": user.username}
 
 # --- Protected Chat Endpoints ---
-@router.get("/conversations")
+@router.get("/conversations", response_model=List[ConversationResponse])
 async def list_conversations(user_id: int = Depends(auth_service.get_current_user)):
     return await memory_service.get_conversations(user_id)
 
@@ -78,7 +59,7 @@ async def create_conversation(
     conv_id = await memory_service.create_conversation(user_id, title)
     return {"id": conv_id, "title": title}
 
-@router.get("/conversations/{conv_id}/messages")
+@router.get("/conversations/{conv_id}/messages", response_model=List[MessageResponse])
 async def get_messages(
     conv_id: str,
     user_id: int = Depends(auth_service.get_current_user)
@@ -134,6 +115,7 @@ async def chat(
         response_text = await brain_service.think(
             request.message, 
             request.conversation_id,
+            user_id,
             model_id=request.model_id,
             reasoning_mode=request.reasoning_mode,
             images=request.images

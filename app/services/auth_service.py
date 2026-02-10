@@ -45,10 +45,15 @@ class AuthService:
     async def get_current_user(self, auth: HTTPAuthorizationCredentials = Security(security)) -> int:
         """Dependency to get the current user ID from the JWT token."""
         token = auth.credentials
-        payload = self.decode_token(token)
-        user_id: int = payload.get("sub")
-        if user_id is None:
-            raise HTTPException(status_code=401, detail="Invalid token")
-        return int(user_id)
+        try:
+            payload = self.decode_token(token)
+            user_id: int = payload.get("sub")
+            if user_id is None:
+                logger.warning(f"Token payload missing 'sub': {payload}")
+                raise HTTPException(status_code=401, detail="Invalid token")
+            return int(user_id)
+        except Exception as e:
+            logger.error(f"Error in get_current_user: {e}")
+            raise
 
 auth_service = AuthService()

@@ -1,9 +1,10 @@
 import os
 import asyncio
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from app.api import router as api_router
+import traceback
 from app.core.config import settings
 from app.core.logger import setup_logging, get_logger
 from app.db.database import init_db
@@ -42,6 +43,29 @@ async def startup_event():
 @app.get("/")
 async def root():
     return FileResponse("frontend/index.html")
+
+# Global Exception Handler
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    logger.error(f"Global Exception caught: {exc}")
+    logger.error(traceback.format_exc())
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Internal Server Error", "error": str(exc)},
+    )
+
+# Request logging middleware
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    logger.info(f"---> {request.method} {request.url.path}")
+    try:
+        response = await call_next(request)
+        logger.info(f"<--- {request.method} {request.url.path} - {response.status_code}")
+        return response
+    except Exception as e:
+        logger.error(f"Middleware Exception: {e}")
+        logger.error(traceback.format_exc())
+        return JSONResponse(status_code=500, content={"detail": str(e)})
 
 app.include_router(api_router, prefix="/api/v1")
 
