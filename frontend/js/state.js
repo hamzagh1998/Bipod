@@ -1,10 +1,9 @@
-// --- Global State ---
 export let state = {
   currentConversationId: null,
   conversations: [],
   authToken: localStorage.getItem("bipod_token"),
   currentUser: null,
-  currentImages: [],
+  currentAttachments: [],
 };
 
 // --- DOM References ---
@@ -26,11 +25,14 @@ export const dom = {
   brainSettingsPanel: document.getElementById("brain-settings-panel"),
   modelSelect: document.getElementById("model-select"),
   modeSelect: document.getElementById("mode-select"),
+  imagineModelSelect: document.getElementById("imagine-model-select"),
 
-  // Image Upload
+  // File Upload
   attachBtn: document.getElementById("attach-btn"),
-  imageUpload: document.getElementById("image-upload"),
-  imagePreviewContainer: document.getElementById("image-preview-container"),
+  fileUpload: document.getElementById("file-upload"),
+  attachmentPreviewContainer: document.getElementById(
+    "attachment-preview-container",
+  ),
 
   // Auth Overlay
   authOverlay: document.getElementById("auth-overlay"),

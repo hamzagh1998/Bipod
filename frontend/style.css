@@ -672,6 +672,24 @@ header h1 {
     margin: 16px 0;
 }
 
+/* Generated Images */
+.ai .message-content img {
+    max-width: 100%;
+    border-radius: var(--radius-md);
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+    border: 1px solid var(--border-color);
+    margin-top: 12px;
+    cursor: zoom-in;
+    transition: transform var(--transition-normal), box-shadow var(--transition-normal);
+}
+
+.ai .message-content img:hover {
+    transform: scale(1.01);
+    box-shadow: 0 8px 30px rgba(138, 43, 226, 0.15);
+    /* Accent glow */
+    border-color: var(--accent-primary);
+}
+
 /* ═══════════════════════════════════════════
    Footer / Input
    ═══════════════════════════════════════════ */
@@ -760,7 +778,33 @@ footer {
 }
 
 .preview-remove:hover {
-    background: var(--accent-error);
+    background: var(--danger);
+}
+
+.pdf-preview-icon {
+    width: 100%;
+    height: 100%;
+    background: rgba(255, 255, 255, 0.03);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    padding: 6px;
+    color: var(--accent-soft);
+}
+
+.pdf-preview-icon .material-symbols-rounded {
+    font-size: 24px;
+}
+
+.pdf-name {
+    font-size: 0.6rem;
+    color: var(--text-dim);
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 #chat-form:focus-within {
@@ -784,6 +828,36 @@ footer {
 
 #user-input::placeholder {
     color: var(--text-dim);
+}
+
+.message-attachments {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 10px;
+}
+
+.msg-attachment-img {
+    max-width: 200px;
+    max-height: 200px;
+    border-radius: var(--radius-md);
+    border: 1px solid var(--border-color);
+}
+
+.msg-attachment-pdf {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: var(--radius-md);
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+    border: 1px solid var(--border-color);
+}
+
+.msg-attachment-pdf .material-symbols-rounded {
+    color: var(--accent-soft);
 }
 
 #send-btn {
@@ -1021,6 +1095,12 @@ footer {
 .setting-group select:hover,
 .setting-group select:focus {
     border-color: var(--accent-primary);
+}
+
+.setting-group select option:disabled {
+    color: var(--text-dim);
+    font-style: italic;
+    opacity: 0.6;
 }
 
 /* ═══════════════════════════════════════════

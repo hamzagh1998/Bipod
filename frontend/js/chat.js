@@ -2,7 +2,7 @@ import { state, dom } from "./state.js";
 import { apiFetch } from "./api.js";
 import { wrapCodeBlocks, copyToClipboard } from "./utils.js";
 import { fetchConversations } from "./conversations.js";
-import { renderImagePreviews } from "./images.js";
+import { renderAttachmentPreviews } from "./attachments.js";
 
 export function appendMessage(role, text, shouldScroll = true) {
   const hero = document.getElementById("welcome-hero");
@@ -15,6 +15,17 @@ export function appendMessage(role, text, shouldScroll = true) {
   contentDiv.className = "message-content";
 
   if (role === "ai") {
+    // Check for generated image success message and append image markdown
+    // Path inside docker is /app/data/generated/filename.jpg
+    const imgMatch = text.match(/Saved to: .*?\/generated\/(.*?\.jpg)/);
+    if (imgMatch) {
+      const filename = imgMatch[1];
+      // Append markdown image if not already present
+      if (!text.includes(`(/generated/${filename})`)) {
+        text += `\n\n![Generated Image](/generated/${filename})`;
+      }
+    }
+
     msgDiv.dataset.rawContent = text;
     contentDiv.innerHTML = marked.parse(text);
     wrapCodeBlocks(contentDiv);
@@ -36,6 +47,27 @@ export function appendMessage(role, text, shouldScroll = true) {
   } else {
     msgDiv.dataset.rawContent = text;
     contentDiv.innerHTML = `<p>${text.replace(/\n/g, "<br>")}</p>`;
+
+    // Show attachments in user message bubble
+    if (state.currentAttachments.length > 0) {
+      const attachmentsDiv = document.createElement("div");
+      attachmentsDiv.className = "message-attachments";
+      state.currentAttachments.forEach((att) => {
+        if (att.type === "image") {
+          const img = document.createElement("img");
+          img.src = `data:image/jpeg;base64,${att.content}`;
+          img.className = "msg-attachment-img";
+          attachmentsDiv.appendChild(img);
+        } else {
+          const pdfIcon = document.createElement("div");
+          pdfIcon.className = "msg-attachment-pdf";
+          pdfIcon.innerHTML = `<span class="material-symbols-rounded">description</span><span>${att.name}</span>`;
+          attachmentsDiv.appendChild(pdfIcon);
+        }
+      });
+      contentDiv.appendChild(attachmentsDiv);
+    }
+
     const userActions = document.createElement("div");
     userActions.className = "msg-actions user-msg-actions";
 
@@ -67,7 +99,7 @@ export function appendMessage(role, text, shouldScroll = true) {
 }
 
 export async function sendMessage(text) {
-  if (!text && state.currentImages.length === 0) return;
+  if (!text && state.currentAttachments.length === 0) return;
 
   // Auto-create conversation if none selected
   if (!state.currentConversationId) {
@@ -99,13 +131,14 @@ export async function sendMessage(text) {
         conversation_id: sentForId,
         model_id: dom.modelSelect.value,
         reasoning_mode: dom.modeSelect.value,
-        images: state.currentImages,
+        imagine_model: dom.imagineModelSelect.value,
+        attachments: state.currentAttachments,
       }),
     });
 
-    state.currentImages = [];
-    renderImagePreviews();
-    dom.imageUpload.value = "";
+    state.currentAttachments = [];
+    renderAttachmentPreviews();
+    dom.fileUpload.value = "";
     if (!response.ok) throw new Error("Network response was not ok");
     const data = await response.json();
 

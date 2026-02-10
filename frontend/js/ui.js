@@ -1,7 +1,7 @@
 import { state, dom } from "./state.js";
 import { createNewConversation } from "./conversations.js";
 import { sendMessage } from "./chat.js";
-import { renderImagePreviews } from "./images.js";
+import { renderAttachmentPreviews } from "./attachments.js";
 import { handleLogin, handleSignup, handleLogout } from "./auth.js";
 
 export function setupEventListeners() {
@@ -30,6 +30,9 @@ export function setupEventListeners() {
   dom.modeSelect.addEventListener("change", () => {
     localStorage.setItem("bipod_mode", dom.modeSelect.value);
   });
+  dom.imagineModelSelect.addEventListener("change", () => {
+    localStorage.setItem("bipod_imagine_model", dom.imagineModelSelect.value);
+  });
 
   // Sidebar Toggle
   dom.sidebarToggle.addEventListener("click", () => {
@@ -51,28 +54,39 @@ export function setupEventListeners() {
   dom.chatForm.addEventListener("submit", async (e) => {
     e.preventDefault();
     const text = dom.userInput.value.trim();
-    if (text || state.currentImages.length > 0) {
+    if (text || state.currentAttachments.length > 0) {
       dom.userInput.value = "";
       dom.userInput.style.height = "auto";
       await sendMessage(text || " ");
     }
   });
 
-  // Attach Image
-  dom.attachBtn.addEventListener("click", () => dom.imageUpload.click());
+  // Attach File
+  dom.attachBtn.addEventListener("click", () => dom.fileUpload.click());
 
-  // Handle File Selection
-  dom.imageUpload.addEventListener("change", (e) => {
+  // Handle File Selection (Images & PDFs)
+  dom.fileUpload.addEventListener("change", (e) => {
     const files = Array.from(e.target.files);
     if (files.length === 0) return;
 
     files.forEach((file) => {
       const reader = new FileReader();
+      const isPdf = file.type === "application/pdf";
+      const isImage = file.type.startsWith("image/");
+
+      if (!isPdf && !isImage) return;
+
       reader.onload = (e) => {
         const fullBase64 = e.target.result;
         const base64Content = fullBase64.split(",")[1];
-        state.currentImages.push(base64Content);
-        renderImagePreviews();
+
+        state.currentAttachments.push({
+          type: isPdf ? "pdf" : "image",
+          content: base64Content,
+          name: file.name,
+        });
+
+        renderAttachmentPreviews();
       };
       reader.readAsDataURL(file);
     });

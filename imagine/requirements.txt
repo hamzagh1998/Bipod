@@ -1,0 +1,10 @@
+fastapi
+uvicorn
+pillow
+accelerate
+diffusers
+transformers
+scipy
+ftfy
+safetensors
+torch --index-url https://download.pytorch.org/whl/cu118

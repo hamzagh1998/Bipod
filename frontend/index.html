@@ -172,7 +172,7 @@
         <footer>
           <form id="chat-form">
             <div
-              id="image-preview-container"
+              id="attachment-preview-container"
               class="image-preview-container"
             ></div>
             <div class="input-row">
@@ -204,20 +204,31 @@
                         <option value="precise">Precise</option>
                       </select>
                     </div>
+                    <div class="setting-group">
+                      <label for="imagine-model-select">Imagine Model</label>
+                      <select id="imagine-model-select">
+                        <option value="stable-diffusion">
+                          Stable Diffusion (Standard)
+                        </option>
+                        <option value="dalle-mini">
+                          TinySD (CPU Optimized)
+                        </option>
+                      </select>
+                    </div>
                   </div>
                 </div>
                 <button
                   type="button"
                   id="attach-btn"
                   class="icon-btn"
-                  title="Attach Image"
+                  title="Attach Files"
                 >
                   <span class="material-symbols-rounded">attach_file</span>
                 </button>
                 <input
                   type="file"
-                  id="image-upload"
-                  accept="image/*"
+                  id="file-upload"
+                  accept="image/*,application/pdf"
                   multiple
                   style="display: none"
                 />

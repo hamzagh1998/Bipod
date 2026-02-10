@@ -11,8 +11,32 @@ async function init() {
   // Load Brain Settings
   const savedModel = localStorage.getItem("bipod_model");
   const savedMode = localStorage.getItem("bipod_mode");
+  const savedImagine = localStorage.getItem("bipod_imagine_model");
   if (savedModel) dom.modelSelect.value = savedModel;
   if (savedMode) dom.modeSelect.value = savedMode;
+
+  // Check hardware capabilities for Imagine models
+  try {
+    const configResp = await fetch("/api/v1/system/config", {
+      headers: { Authorization: `Bearer ${state.authToken}` },
+    });
+    if (configResp.ok) {
+      const config = await configResp.json();
+      const sdOption = dom.imagineModelSelect.querySelector(
+        'option[value="stable-diffusion"]',
+      );
+
+      if (!config.use_gpu) {
+        sdOption.disabled = true;
+        sdOption.innerText += " (GPU Required)";
+        dom.imagineModelSelect.value = "dalle-mini";
+      } else if (savedImagine) {
+        dom.imagineModelSelect.value = savedImagine;
+      }
+    }
+  } catch (e) {
+    console.error("Failed to fetch system config", e);
+  }
 
   // Restore conversation from URL param
   const params = new URLSearchParams(window.location.search);

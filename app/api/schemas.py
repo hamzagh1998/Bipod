@@ -19,11 +19,16 @@ class UserResponse(BaseModel):
         from_attributes = True
 
 # --- Chat Models ---
+class Attachment(BaseModel):
+    type: str # 'image' or 'pdf'
+    content: str # b64
+    name: Optional[str] = None
+
 class MessageResponse(BaseModel):
     id: int
     role: str
     content: str
-    images: Optional[List[str]] = None
+    attachments: Optional[List[Attachment]] = None
     created_at: datetime
 
     class Config:
@@ -43,7 +48,8 @@ class ChatRequest(BaseModel):
     conversation_id: str
     model_id: Optional[str] = None
     reasoning_mode: Optional[str] = None
-    images: Optional[List[str]] = None
+    imagine_model: Optional[str] = None # 'stable-diffusion' or 'dalle-mini'
+    attachments: Optional[List[Attachment]] = None
 
 class ChatResponse(BaseModel):
     response: str

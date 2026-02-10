@@ -6,6 +6,9 @@ from app.db.database import AsyncSessionLocal
 from app.db.models import Conversation, Message, User
 from app.core.logger import get_logger
 
+# Deferred import to avoid circular dependency
+# vector_service is imported inside delete_conversation()
+
 logger = get_logger("bipod.services.memory")
 
 class MemoryService:
@@ -97,19 +100,51 @@ class MemoryService:
             return stored_hash == self._hash_password(password)
 
     async def delete_conversation(self, conv_id: str, user_id: int):
+        """Deletes a conversation and ALL associated data (messages + vector memories)."""
+        # 1. First verify the conversation belongs to this user
+        async with AsyncSessionLocal() as session:
+            conv_check = await session.execute(
+                select(Conversation.id).where(
+                    Conversation.id == conv_id, Conversation.user_id == user_id
+                )
+            )
+            if not conv_check.scalar_one_or_none():
+                logger.warning(f"Conversation {conv_id} not found for user {user_id}, skipping delete.")
+                return
+
+        # 2. Delete all messages explicitly (belt + suspenders with cascade)
+        async with AsyncSessionLocal() as session:
+            await session.execute(
+                delete(Message).where(Message.conversation_id == conv_id)
+            )
+            await session.commit()
+            logger.info(f"Deleted all messages for conversation {conv_id}")
+
+        # 3. Delete the conversation itself
         async with AsyncSessionLocal() as session:
             await session.execute(
                 delete(Conversation)
                 .where(Conversation.id == conv_id, Conversation.user_id == user_id)
             )
             await session.commit()
+            logger.info(f"Deleted conversation {conv_id} from SQLite")
 
-    async def add_message(self, conv_id: str, role: str, content: str, images: Optional[List[str]] = None):
+        # 4. Clean up vector memories (deferred import to avoid circular dependency)
+        try:
+            from app.services.vector_service import vector_service
+            await vector_service.delete_conversation_memories(conv_id)
+            logger.info(f"Cleaned up vector memories for conversation {conv_id}")
+        except Exception as e:
+            logger.error(f"Failed to clean up vector memories for {conv_id}: {e}")
+
+    async def add_message(self, conv_id: str, role: str, content: str, attachments: Optional[List[dict]] = None) -> Message:
         # We don't check user_id here as the chat flow checks it before calling add_message
         async with AsyncSessionLocal() as session:
-            new_msg = Message(conversation_id=conv_id, role=role, content=content, images=images)
+            new_msg = Message(conversation_id=conv_id, role=role, content=content, attachments=attachments)
             session.add(new_msg)
             await session.commit()
+            await session.refresh(new_msg)
+            return new_msg
 
     async def get_messages(self, conv_id: str, user_id: int) -> List[Message]:
         async with AsyncSessionLocal() as session:

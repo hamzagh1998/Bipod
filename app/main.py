@@ -22,6 +22,12 @@ app = FastAPI(
 # Mount static files
 app.mount("/static", StaticFiles(directory="frontend"), name="static")
 
+# Mount generated files (Bipod's creations)
+# Ensure directory exists first (handled in config, but safe to check)
+if not os.path.exists(settings.GENERATED_DIR):
+    os.makedirs(settings.GENERATED_DIR)
+app.mount("/generated", StaticFiles(directory=settings.GENERATED_DIR), name="generated")
+
 # Enable Python JIT check
 if os.environ.get("PYTHON_JIT") == "on":
     logger.info("🚀 Python JIT is enabled and running.")

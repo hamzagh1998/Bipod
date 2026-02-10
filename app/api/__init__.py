@@ -3,6 +3,7 @@ from typing import List, Optional
 from app.services.brain_service import brain_service
 from app.services.memory_service import memory_service
 from app.services.auth_service import auth_service
+from app.core.config import settings
 from app.api.schemas import * # We'll use specific imports below to be safe
 
 router = APIRouter()
@@ -16,6 +17,16 @@ from app.api.schemas import (
 @router.get("/health")
 async def health_check():
     return {"status": "ok", "message": "Bipod's nervous system is functional."}
+
+@router.get("/system/config")
+async def get_system_config():
+    """Returns hardware capabilities and available models."""
+    return {
+        "hardware": settings.HARDWARE_TARGET,
+        "use_gpu": settings.USE_GPU,
+        "imagine_models": ["stable-diffusion", "dalle-mini"],
+        "default_imagine_model": "stable-diffusion" if settings.USE_GPU else "dalle-mini"
+    }
 
 # --- Auth Endpoints ---
 @router.post("/auth/signup", response_model=Token)
@@ -118,7 +129,8 @@ async def chat(
             user_id,
             model_id=request.model_id,
             reasoning_mode=request.reasoning_mode,
-            images=request.images
+            imagine_model=request.imagine_model,
+            attachments=[a.model_dump() for a in request.attachments] if request.attachments else None
         )
         return ChatResponse(response=response_text)
     except HTTPException:
