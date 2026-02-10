@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Bipod | Weightless Intelligence</title>
+    <link rel="stylesheet" href="/static/style.css" />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600&display=swap"
+      rel="stylesheet"
+    />
+  </head>
+  <body>
+    <div class="glass-container">
+      <header>
+        <div class="logo">
+          <span class="pulsar"></span>
+          <h1>Bipod</h1>
+        </div>
+        <div class="status-badge">
+          <span id="connection-status">Online</span>
+        </div>
+      </header>
+
+      <main id="chat-window">
+        <div class="message system">
+          <p>
+            Welcome, I am Bipod. Your local, weightless companion. How can I
+            assist you today?
+          </p>
+        </div>
+      </main>
+
+      <footer>
+        <form id="chat-form">
+          <input
+            type="text"
+            id="user-input"
+            placeholder="Type your message..."
+            autocomplete="off"
+          />
+          <button type="submit">
+            <svg viewBox="0 0 24 24" width="24" height="24">
+              <path
+                fill="currentColor"
+                d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"
+              ></path>
+            </svg>
+          </button>
+        </form>
+      </footer>
+    </div>
+    <script src="/static/script.js"></script>
+  </body>
+</html>

@@ -1,6 +1,8 @@
 import os
 import asyncio
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from app.api import router as api_router
 from app.core.config import settings
 from app.core.logger import setup_logging, get_logger
@@ -14,6 +16,9 @@ app = FastAPI(
     description="The brain of your weightless AI companion.",
     version="0.1.0",
 )
+
+# Mount static files
+app.mount("/static", StaticFiles(directory="frontend"), name="static")
 
 # Enable Python JIT check
 if os.environ.get("PYTHON_JIT") == "on":
@@ -34,7 +39,7 @@ async def startup_event():
 
 @app.get("/")
 async def root():
-    return {"status": "online", "message": "Bipod is weightless and thinking."}
+    return FileResponse("frontend/index.html")
 
 app.include_router(api_router, prefix="/api/v1")
 

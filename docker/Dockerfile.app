@@ -26,8 +26,9 @@ RUN pip install --no-cache-dir --upgrade pip
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application logic
+# Copy application logic and frontend assets
 COPY ./app ./app
+COPY ./frontend ./frontend
 
 # Metadata and Data volumes
 VOLUME ["/app/data"]
