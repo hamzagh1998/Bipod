@@ -4,51 +4,165 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Bipod | Weightless Intelligence</title>
+    <meta
+      name="description"
+      content="Bipod — Your local, weightless AI companion. Private, offline, intelligent."
+    />
     <link rel="stylesheet" href="/static/style.css" />
     <link
-      href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=Outfit:wght@300;400;600&family=Fira+Code:wght@400;500&display=swap"
       rel="stylesheet"
     />
+    <!-- Material Symbols Icons -->
+    <link
+      href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200"
+      rel="stylesheet"
+    />
+    <!-- Markdown & Syntax Highlighting -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <link
+      rel="stylesheet"
+      href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css"
+    />
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
   </head>
   <body>
     <div class="glass-container">
-      <header>
-        <div class="logo">
-          <span class="pulsar"></span>
-          <h1>Bipod</h1>
-        </div>
-        <div class="status-badge">
-          <span id="connection-status">Online</span>
-        </div>
-      </header>
-
-      <main id="chat-window">
-        <div class="message system">
-          <p>
-            Welcome, I am Bipod. Your local, weightless companion. How can I
-            assist you today?
-          </p>
-        </div>
-      </main>
-
-      <footer>
-        <form id="chat-form">
-          <input
-            type="text"
-            id="user-input"
-            placeholder="Type your message..."
-            autocomplete="off"
-          />
-          <button type="submit">
-            <svg viewBox="0 0 24 24" width="24" height="24">
+      <aside id="sidebar" class="sidebar">
+        <div class="sidebar-header">
+          <div class="brand-row">
+            <!-- Inline SVG Bipod Logo -->
+            <svg
+              class="bipod-logo"
+              viewBox="0 0 36 36"
+              width="32"
+              height="32"
+              fill="none"
+              xmlns="http://www.w3.org/2000/svg"
+            >
+              <defs>
+                <linearGradient
+                  id="logo-grad"
+                  x1="0%"
+                  y1="0%"
+                  x2="100%"
+                  y2="100%"
+                >
+                  <stop offset="0%" style="stop-color: #8a2be2" />
+                  <stop offset="100%" style="stop-color: #a855f7" />
+                </linearGradient>
+              </defs>
+              <rect width="36" height="36" rx="8" fill="url(#logo-grad)" />
               <path
-                fill="currentColor"
-                d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"
-              ></path>
+                d="M11 8h6a5 5 0 0 1 0 10h-6V8zm2 3v4h4a2 2 0 1 0 0-4h-4z"
+                fill="white"
+              />
+              <path
+                d="M11 18h6a5 5 0 0 1 0 10h-6V18zm2 3v4h4a2 2 0 1 0 0-4h-4z"
+                fill="white"
+                opacity="0.7"
+              />
+              <circle cx="27" cy="13" r="3" fill="white" opacity="0.5" />
+              <circle cx="27" cy="23" r="2" fill="white" opacity="0.3" />
             </svg>
+            <span class="brand-name">Bipod</span>
+          </div>
+          <button id="new-chat-btn" class="btn-primary">
+            <span class="material-symbols-rounded">add</span>
+            New Chat
+            <kbd class="shortcut-hint">⌘⇧O</kbd>
           </button>
-        </form>
-      </footer>
+        </div>
+        <div class="sidebar-divider"></div>
+        <div class="sidebar-section-label">Conversations</div>
+        <div id="history-container" class="history-container">
+          <!-- History items will be injected here -->
+        </div>
+      </aside>
+      <div id="sidebar-overlay" class="sidebar-overlay"></div>
+
+      <div class="main-chat">
+        <header>
+          <div class="header-left">
+            <button id="sidebar-toggle" class="icon-btn" title="Toggle Sidebar">
+              <span class="material-symbols-rounded">menu</span>
+            </button>
+            <h1 id="chat-title">Bipod</h1>
+          </div>
+          <div class="header-actions">
+            <div class="status-badge online">
+              <span class="status-dot"></span>
+              <span id="connection-status">Online</span>
+            </div>
+          </div>
+        </header>
+
+        <main id="chat-window">
+          <div id="welcome-hero" class="welcome-hero">
+            <svg
+              class="welcome-logo"
+              viewBox="0 0 36 36"
+              width="56"
+              height="56"
+              fill="none"
+              xmlns="http://www.w3.org/2000/svg"
+            >
+              <defs>
+                <linearGradient
+                  id="welcome-grad"
+                  x1="0%"
+                  y1="0%"
+                  x2="100%"
+                  y2="100%"
+                >
+                  <stop offset="0%" style="stop-color: #8a2be2" />
+                  <stop offset="100%" style="stop-color: #a855f7" />
+                </linearGradient>
+              </defs>
+              <rect width="36" height="36" rx="8" fill="url(#welcome-grad)" />
+              <path
+                d="M11 8h6a5 5 0 0 1 0 10h-6V8zm2 3v4h4a2 2 0 1 0 0-4h-4z"
+                fill="white"
+              />
+              <path
+                d="M11 18h6a5 5 0 0 1 0 10h-6V18zm2 3v4h4a2 2 0 1 0 0-4h-4z"
+                fill="white"
+                opacity="0.7"
+              />
+              <circle cx="27" cy="13" r="3" fill="white" opacity="0.5" />
+              <circle cx="27" cy="23" r="2" fill="white" opacity="0.3" />
+            </svg>
+            <h2>Welcome to Bipod</h2>
+            <p>Your local, weightless AI companion. Private by design.</p>
+          </div>
+          <div id="loading-indicator" class="message ai hidden">
+            <div class="message-content">
+              <div class="typing-indicator">
+                <span></span>
+                <span></span>
+                <span></span>
+              </div>
+            </div>
+          </div>
+        </main>
+
+        <footer>
+          <form id="chat-form">
+            <textarea
+              id="user-input"
+              placeholder="Message Bipod..."
+              rows="1"
+              autocomplete="off"
+            ></textarea>
+            <button type="submit" id="send-btn" title="Send message">
+              <span class="material-symbols-rounded">arrow_upward</span>
+            </button>
+          </form>
+          <div class="footer-hint">
+            Bipod runs entirely on your machine. Your data never leaves.
+          </div>
+        </footer>
+      </div>
     </div>
     <script src="/static/script.js"></script>
   </body>

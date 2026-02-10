@@ -5,6 +5,8 @@ from app.core.config import settings
 from app.core.logger import get_logger
 from app.services.file_service import file_service
 
+from app.services.memory_service import memory_service
+
 logger = get_logger("bipod.brain")
 
 class BrainService:
@@ -13,16 +15,25 @@ class BrainService:
     def __init__(self):
         self.base_url = settings.OLLAMA_BASE_URL
         self.active_model = settings.ACTIVE_MODEL
-        self.history: List[Dict[str, Any]] = []
         
         # System Prompt following Bipod Philosophy
         self.system_prompt = (
-            "You are Bipod, a weightless AI companion. "
-            "You run locally and prioritize your user's privacy. "
-            "You have access to the host filesystem via the provided tools. "
-            "If a user asks to find or read a file, use the tools. "
-            "Be concise, intelligent, and proactive."
+            "You are Bipod, a weightless AI companion running entirely on the user's local machine. "
+            "You prioritize privacy — no data ever leaves this device. "
+            "You are helpful, concise, and intelligent. "
+            "You can have natural conversations on any topic. "
+            "You also have filesystem tools available, but you must ONLY use them when the user "
+            "EXPLICITLY asks you to find, search, open, or read a file. "
+            "For normal conversation, questions, or explanations, just respond directly without using any tools. "
+            "Never search for files or use tools unless the user's message clearly requests file operations."
         )
+
+        # Keywords that trigger tool inclusion
+        self.FILE_KEYWORDS = {
+            "file", "files", "find", "search", "read", "open",
+            "look", "list", "directory", "folder", "path",
+            "document", "documents", "locate", "show me",
+        }
 
         # Define tools for Ollama
         self.tools = [
@@ -56,24 +67,38 @@ class BrainService:
             }
         ]
 
-    async def think(self, user_input: str) -> str:
+    async def think(self, user_input: str, conversation_id: str) -> str:
         """Processes user input, handles tool calls, and returns a response."""
-        self.history.append({"role": "user", "content": user_input})
+        # Save user message to DB
+        await memory_service.add_message(conversation_id, "user", user_input)
         
-        # Build the message context
-        messages = [{"role": "system", "content": self.system_prompt}] + self.history[-10:]
+        # Retrieve context from DB
+        history = await memory_service.get_messages(conversation_id)
+        
+        # Build the message context (last 15 messages)
+        formatted_history = [{"role": m.role, "content": m.content} for m in history[-15:]]
+        messages = [{"role": "system", "content": self.system_prompt}] + formatted_history
+
+        # Only include tools when the user message contains file-related keywords
+        words = set(user_input.lower().split())
+        include_tools = bool(words & self.FILE_KEYWORDS)
+        if include_tools:
+            logger.info("File-related keywords detected — tools enabled for this request.")
 
         try:
             async with httpx.AsyncClient(timeout=60.0) as client:
-                # 1. Initial request to see if LLM wants to use a tool
+                # 1. Initial request (with or without tools)
+                payload = {
+                    "model": self.active_model,
+                    "messages": messages,
+                    "stream": False,
+                }
+                if include_tools:
+                    payload["tools"] = self.tools
+
                 response = await client.post(
                     f"{self.base_url}/api/chat",
-                    json={
-                        "model": self.active_model,
-                        "messages": messages,
-                        "tools": self.tools,
-                        "stream": False,
-                    },
+                    json=payload,
                 )
                 response.raise_for_status()
                 data = response.json()
@@ -117,15 +142,17 @@ class BrainService:
                 else:
                     ai_message = message.get("content", "")
 
-                # Store history
-                self.history.append({"role": "assistant", "content": ai_message})
+                # Store AI message to DB
+                await memory_service.add_message(conversation_id, "assistant", ai_message)
                 return ai_message
 
         except Exception as e:
             logger.error(f"Brain failure: {e}")
             return f"My thoughts are currently fragmented: {str(e)}"
 
-    def clear_memory(self):
-        self.history = []
+    def clear_memory(self, conversation_id: str):
+        # We don't really use this anymore as we store in DB, 
+        # but we could implement clearing a specific conversation
+        pass
 
 brain_service = BrainService()

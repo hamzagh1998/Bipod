@@ -6,6 +6,7 @@ from fastapi.responses import FileResponse
 from app.api import router as api_router
 from app.core.config import settings
 from app.core.logger import setup_logging, get_logger
+from app.db.database import init_db
 
 # Initialize beautiful colored logs
 setup_logging()
@@ -26,6 +27,7 @@ if os.environ.get("PYTHON_JIT") == "on":
 
 @app.on_event("startup")
 async def startup_event():
+    await init_db()
     logger.info(f"Bipod is waking up on hardware: {settings.HARDWARE_TARGET}")
     logger.info(f"Active Brain Model: {settings.ACTIVE_MODEL}")
     logger.info(f"Ollama URL: {settings.OLLAMA_BASE_URL}")

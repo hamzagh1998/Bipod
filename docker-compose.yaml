@@ -43,6 +43,7 @@ services:
       - video
     volumes:
       - ./app:/app/app
+      - ./frontend:/app/frontend
       - ./data:/app/data
       - /:/host:ro
 

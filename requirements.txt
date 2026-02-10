@@ -8,4 +8,6 @@ python-multipart
 httpx
 jinja2
 aiofiles
+sqlalchemy
+aiosqlite
 # Add other dependencies as needed for vision/ollama-client
