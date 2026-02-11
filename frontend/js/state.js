@@ -42,4 +42,9 @@ export const dom = {
   toLogin: document.getElementById("to-login"),
   logoutBtn: document.getElementById("logout-btn"),
   currentUsernameSpan: document.getElementById("current-username"),
+  // Lightbox
+  lightbox: document.getElementById("lightbox"),
+  lightboxImg: document.getElementById("lightbox-img"),
+  lightboxClose: document.getElementById("lightbox-close"),
+  lightboxOverlay: document.getElementById("lightbox-overlay"),
 };

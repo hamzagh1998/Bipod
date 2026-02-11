@@ -25,7 +25,9 @@ services:
       - "8001:8001"
     environment:
       - HF_HOME=/app/models
+      - OFFLINE_MODE=${OFFLINE_MODE:-true}
     volumes:
+      - ./imagine:/app
       - ./data/models:/app/models
     deploy:
       resources:

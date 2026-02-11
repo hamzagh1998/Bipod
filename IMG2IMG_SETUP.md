@@ -15,12 +15,24 @@ Because I updated the `imagine` service code (internal dependencies), you **MUST
 docker compose up -d --build
 ```
 
+## **Optional: Preload Models (Highly Recommended)**
+
+To avoid waiting during your first chat, you can "charge" Bipod's imagination by pre-downloading the model weights (~5GB total):
+
+```bash
+docker exec -it bipod_imagine python preload.py
+```
+
+_Wait for this to complete. Once finished, you can generate images instantly even if offline._
+
 ## NEW: Imagine Model Selector ⚙️
 
 You can now choose your preferred model in the **Brain Settings** (click the **+ icon** next to the chat input).
 
 - Stable Diffusion: Best quality (Requires NVIDIA GPU).
 - TinySD: Fast and lightweight (Optimized for CPU/Edge devices).
+
+**Note:** The very first time you generate an image, Bipod needs to download the model weights (several GBs). This may take a few minutes depending on your internet speed. Stable Diffusion will be much slower on CPU if no GPU is detected.
 
 Bipod automatically detects your hardware; if no GPU is found, the Stable Diffusion option will be disabled to prevent crashes.
 

@@ -27,35 +27,35 @@ class BrainService:
             "You also have filesystem tools available. You can search, read, create, or update TEXT files. "
             "You can execute shell commands for efficient searching (grep, find) or system tasks. "
             "You can ANALYZE and DESCRIBE existing images at specific paths using the vision model. "
-            "\n\nCRITICAL RULES:\n"
+            "You have a specialized tool to get real-time SYSTEM INFORMATION (CPU, GPU, OS, Time). "
+            "### TOOL USAGE EXAMPLES:\n"
+            "If you need to call a tool, output valid JSON within your response. Example:\n"
+            "{\"name\": \"get_system_info\", \"arguments\": {}}\n"
+            "{\"name\": \"execute_system_command\", \"arguments\": {\"command\": \"ls -la\"}}\n\n"
+            "### CORE DIRECTIVES:\n"
             "1. ALWAYS PRIORITIZE the current user message. Execute exactly what the user asks.\n"
-            "2. NEVER reference files, paths, or content from [RECOLLECTED HISTORICAL BACKGROUND] "
-            "unless the user explicitly asks about past conversations or memories.\n"
-            "3. If a user asks you to find a file, USE THE search_files TOOL or execute_system_command TOOL "
-            "to actually search the filesystem. DO NOT guess or assume files based on memory.\n"
-            "4. DO NOT say a task is 'too resource intensive' or that you 'cannot see' — just use the tools.\n"
-            "5. If a file search or command is needed, do it IMMEDIATELY without waffling.\n"
-            "6. When searching for files, use the search_files or execute_system_command tool "
-            "with 'find' command. ALWAYS search before claiming a file does not exist.\n"
-            "7. EACH CONVERSATION IS INDEPENDENT. Do not mix up content from different conversations.\n"
-            "8. You CAN generate images using the `generate_image` tool. If asked to 'draw' or 'create' an image, use this tool. "
-            "For 'fast' generation or if requested, use 'dalle-mini' model, otherwise default to 'stable-diffusion'.\n"
-            "9. NEVER claim a file exists or was created unless a tool has confirmed it. "
-            "Do NOT hallucinate file operations.\n"
-            "10. ONLY create or save files on the host when the user EXPLICITLY asks you to. "
-            "Always tell the user the actual path returned by the save_file tool."
+            "2. If a user asks to **draw**, **create**, **make**, or **generate** an image, you **MUST** use the `generate_image` tool. **NEVER** try to use `execute_system_command` for this.\n"
+            "3. Use `search_files` to find filenames. Use `read_file` to see content. Use `save_file` to persist progress.\n"
+            "4. DO NOT explain why you are using a tool unless it's a complex multi-step process.\n"
+            "5. If a specialized tool exists (save_file, generate_image, search_files), use it instead of `execute_system_command`.\n"
+            "6. EACH CONVERSATION IS INDEPENDENT. Do not mix up content from different sessions.\n"
+            "7. For image generation, use 'stable-diffusion' by default. Use 'dalle-mini' only if 'fast' or 'rough' is requested.\n"
+            "8. ALWAYS provide the actual file path returned by the tool when confirming a task (e.g. 'Image saved to /app/data/...'). If the tool output contains a markdown image preview (e.g. ![Generated Image](...)), ALWAYS include it in your response so the user can see it.\n"
+            "9. If the user asks for the CURRENT TIME, CPU usage, GPU status, or OS info, you MUST use the `get_system_info` tool. DO NOT guess or claim you lack access. "
+            "The information you provide MUST come from the tool output."
         )
 
-        # Keywords that trigger tool inclusion
+        # Keywords that trigger tool inclusion (expanded)
         self.FILE_KEYWORDS = {
             "file", "files", "find", "search", "read", "open",
             "look", "list", "directory", "folder", "path",
             "document", "documents", "locate", "show me", "save", "create", "write",
             "image", "png", "jpg", "jpeg", "picture", "screenshot", "describe",
-            "generate", "make", "move", "copy", "delete", "rename", "pdf"
+            "generate", "make", "move", "copy", "delete", "rename", "pdf",
+            "draw", "paint", "art", "sketch", "visualize"
         }
 
-        # Define tools for Ollama (always available for file operations)
+        # Define tools for Ollama
         self.tools = [
             {
                 "type": "function",
@@ -105,7 +105,7 @@ class BrainService:
                 "type": "function",
                 "function": {
                     "name": "analyze_image_file",
-                    "description": "Reads an EXISTING image file from the host filesystem and describes its content using the vision model (Moondream). This tool ONLY analyzes and describes existing images — it does NOT generate, create, or produce new images. If the image does not exist at the given path, it will return an error.",
+                    "description": "Reads an EXISTING image file from the host filesystem and describes its content using the vision model (Moondream). This tool ONLY analyzes and describes existing images — it does NOT generate, create, or produce new images.",
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -120,13 +120,13 @@ class BrainService:
                 "type": "function",
                 "function": {
                     "name": "generate_image",
-                    "description": "Generates a new image based on a text prompt using AI (Stable Diffusion). Returns the path to the generated image.",
+                    "description": "Generates a new image based on a text prompt using AI. Returns the path to the generated image.",
                     "parameters": {
                         "type": "object",
                         "properties": {
                             "prompt": {"type": "string", "description": "Detailed description of the image to generate."},
                             "image_path": {"type": "string", "description": "Optional. Path to an existing image file (e.g. from user upload) to use as a starting point (Image-to-Image)."},
-                            "model_type": {"type": "string", "enum": ["stable-diffusion", "dalle-mini"], "description": "Model to use. Default 'stable-diffusion'. Use 'dalle-mini' for faster/lower quality generation."},
+                            "model_type": {"type": "string", "enum": ["stable-diffusion", "dalle-mini"], "description": "Model to use. Default 'stable-diffusion'."},
                         },
                         "required": ["prompt"],
                     },
@@ -136,7 +136,7 @@ class BrainService:
                 "type": "function",
                 "function": {
                     "name": "execute_system_command",
-                    "description": "Executes a shell command on the host system and returns the output. Use this for high-performance searching (grep, find), directory listings, or system diagnostics.",
+                    "description": "Executes a shell command on the host system. Use this for searching (grep, find), directory listings, or system diagnostics. DO NOT use this for image generation, file creation, or reading files — use the specific tools provided for those tasks.",
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -145,8 +145,55 @@ class BrainService:
                         "required": ["command"],
                     },
                 },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_system_info",
+                    "description": "Returns current system information including CPU usage, GPU status, OS details, and current time.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {}
+                    }
+                }
             }
         ]
+
+    def _get_relevant_tools(self, user_input: str) -> List[Dict]:
+        """Filters the tools list to only include what's relevant to the current request.
+        This helps smaller models (like Llama 3.2 3B) stay focused and avoid hallucinations.
+        """
+        lower_input = user_input.lower()
+        
+        # Determine intent categories
+        is_generation = any(k in lower_input for k in ["generate", "draw", "make", "create", "paint", "imagine", "art", "visualize", "sketch"])
+        is_search = any(k in lower_input for k in ["find", "search", "locate", "where", "list", "directory", "folder", "path", "files"])
+        is_file_op = any(k in lower_input for k in ["read", "open", "show", "save", "write", "update", "delete", "rename"])
+        is_vision = any(k in lower_input for k in ["describe", "analyze", "see", "what is", "look", "vision"])
+        is_system = any(k in lower_input for k in ["cpu", "gpu", "usage", "system", "hardware", "info", "time", "clock", "os", "kernel"])
+
+        name_to_index = {t["function"]["name"]: i for i, t in enumerate(self.tools)}
+        relevant_indices = set()
+        
+        if is_generation and "generate_image" in name_to_index:
+            relevant_indices.add(name_to_index["generate_image"])
+        if is_search:
+            if "search_files" in name_to_index: relevant_indices.add(name_to_index["search_files"])
+            if "execute_system_command" in name_to_index: relevant_indices.add(name_to_index["execute_system_command"])
+        if is_file_op:
+            if "read_file" in name_to_index: relevant_indices.add(name_to_index["read_file"])
+            if "save_file" in name_to_index: relevant_indices.add(name_to_index["save_file"])
+        if is_system:
+            if "get_system_info" in name_to_index: relevant_indices.add(name_to_index["get_system_info"])
+            if "execute_system_command" in name_to_index: relevant_indices.add(name_to_index["execute_system_command"])
+        if is_vision:
+            if "analyze_image_file" in name_to_index: relevant_indices.add(name_to_index["analyze_image_file"])
+
+        # If no clear intent, provide a balanced set (search, read, generate)
+        if not relevant_indices:
+            return self.tools
+            
+        return [self.tools[i] for i in sorted(list(relevant_indices))]
 
     async def think(
         self, 
@@ -226,10 +273,21 @@ class BrainService:
         if pdf_texts and formatted_history and formatted_history[-1]["role"] == "user":
             formatted_history[-1]["content"] += "\n" + "\n".join(pdf_texts)
 
-        # 4. Determine model to use (Force vision if any images exist in current thread)
+        # 4. Determine model to use
         target_model = model_id if model_id else self.active_model
-        if thread_has_images:
-            target_model = settings.VISION_MODEL
+        
+        # Determine if this is a generation request (to avoid switching to vision model which can't call tools)
+        lower_input = user_input.lower()
+        generation_keywords = {"generate", "draw", "make", "create", "paint", "imagine"}
+        is_generation_request = any(k in lower_input for k in generation_keywords)
+
+        # Only force vision model for specialized analysis, not for generation/search
+        if thread_has_images and not is_generation_request:
+            # If the user is asking to "see", "describe" or "analyze", we NEED the vision model
+            vision_trigger = {"describe", "see", "what", "analyze", "explain", "look"}
+            if any(v in lower_input for v in vision_trigger):
+                target_model = settings.VISION_MODEL
+                logger.info("Vision task detected — switching brain to specialized eyes.")
 
         # Determine reasoning instructions
         mode_instruction = ""
@@ -249,7 +307,15 @@ class BrainService:
         current_system_prompt = self.system_prompt + mode_instruction
         
         if imagine_model:
-             current_system_prompt += f"\n[USER PREFERENCE]: When generating images, PREFER using the model '{imagine_model}'. Only deviate if explicitly asked otherwise."
+             current_system_prompt += f"\n[USER PREFERENCE]: When generating images, you MUST use the '{imagine_model}' model via the `generate_image` tool."
+        
+        # Strengthen the core image generation directive right before the history
+        if is_generation_request:
+            current_system_prompt += (
+                "\n\n[SYSTEM DIRECTIVE: IMAGE GENERATION REQUESTED]\n"
+                "You are about to generate an image. You MUST use the `generate_image` tool with a detailed prompt. "
+                "DO NOT narrate your plan. DO NOT suggest alternative methods like shell commands. Just call the tool."
+            )
         
         # Inject context about uploaded images (for Img2Img)
         if current_image_paths:
@@ -286,19 +352,15 @@ class BrainService:
 
         messages = [{"role": "system", "content": current_system_prompt}] + formatted_history
 
-        # 5. Include tools only if NOT in vision mode (to avoid vision model complexity)
+        # 5. Include tools if keywords detected (Regardless of vision mode, though vision models might ignore them)
         include_tools = False
-        if not thread_has_images:
-            lower_input = user_input.lower()
-            # Use substring matching instead of exact word matching
-            # This catches multi-word phrases and partial matches
-            if any(k in lower_input for k in self.FILE_KEYWORDS):
-                include_tools = True
-                logger.info("File-related keywords detected — tools enabled for this request.")
-            # Also enable tools if the message references a filesystem path
-            elif any(p in lower_input for p in ["/home", "/root", "/tmp", "/etc", "/var", "/opt", "c:\\", "d:\\"]):
-                include_tools = True
-                logger.info("Filesystem path detected — tools enabled for this request.")
+        if any(k in lower_input for k in self.FILE_KEYWORDS):
+            include_tools = True
+            logger.info("File/Generation keywords detected — tools enabled for this request.")
+        elif any(p in lower_input for p in ["/home", "/root", "/tmp", "/etc", "/var", "/opt", "c:\\", "d:\\"]):
+            include_tools = True
+            logger.info("Filesystem path detected — tools enabled for this request.")
+
 
         try:
             # Use longer timeout when tools are enabled (file searches can be slow)
@@ -311,7 +373,10 @@ class BrainService:
                     "stream": False,
                 }
                 if include_tools:
-                    payload["tools"] = self.tools
+                    # Filter tools to only include what's relevant to this turn
+                    filtered_tools = self._get_relevant_tools(user_input)
+                    payload["tools"] = filtered_tools
+                    logger.info(f"Passing {len(filtered_tools)} tools to brain: {[t['function']['name'] for t in filtered_tools]}")
 
                 response = await client.post(
                     f"{self.base_url}/api/chat",
@@ -321,78 +386,134 @@ class BrainService:
                 data = response.json()
                 message = data.get("message", {})
 
-                # 2. Check for tool calls
-                if "tool_calls" in message:
-                    for tool_call in message["tool_calls"]:
+                # 2. Recursive Tool Execution Loop (up to 5 turns)
+                max_turns = 5
+                turn = 0
+                thoughts_buffer = ""
+                
+                while turn < max_turns:
+                    tool_calls = message.get("tool_calls", [])
+                    
+                    # 2.1 Detect and Strip Hallucinated Tool Calls
+                    hallucinated_calls, stripped_content = self._check_for_hallucinated_tools(message.get("content", ""))
+                    if include_tools and not tool_calls:
+                        tool_calls = hallucinated_calls
+
+                    # 2.2 Clean content of markers and JSON
+                    message["content"] = stripped_content
+
+                    # 2.3 Accumulate thoughts ONLY if this turn resulted in tools
+                    if message["content"] and tool_calls:
+                        thoughts_buffer += message["content"] + "\n\n"
+
+                    if not tool_calls:
+                        break  # No more tools, we're done
+
+                    turn += 1
+                    logger.info(f"Processing tool turn {turn}/{max_turns}...")
+                    
+                    # Ensure assistant message with tool_calls is in history for the brain
+                    if "tool_calls" not in message:
+                        message["tool_calls"] = tool_calls
+                    messages.append(message)
+
+                    for tool_call in tool_calls:
                         fn_name = tool_call["function"]["name"]
                         args = tool_call["function"]["arguments"]
                         
-                        logger.info(f"Bipod decided to use tool: {fn_name} with args {args}")
+                        logger.info(f"Executing tool: {fn_name}")
                         
                         result = ""
-                        if fn_name == "search_files":
-                            found = await file_service.search_host(
-                                args.get("pattern"), 
-                                root_dir=args.get("root")
-                            )
-                            result = f"Found files: {found}"
-                        elif fn_name == "read_file":
-                            content = await file_service.read_host_file(args.get("path"))
-                            result = content if content else "File not found or empty."
-                        elif fn_name == "save_file":
-                            saved_path = await file_service.write_host_file(args.get("path"), args.get("content"))
-                            if saved_path:
-                                result = f"File saved successfully to: {saved_path}"
-                            else:
-                                result = "Failed to save file. Check the path and permissions."
-                        elif fn_name == "analyze_image_file":
-                            b64 = await file_service.read_host_image(args.get("path"))
-                            if b64:
-                                prompt = args.get("prompt", "Describe this image in detail.")
-                                result = await self._vision_request(b64, prompt)
-                            else:
-                                result = "Error: Could not find or read the image file at that path."
-                        elif fn_name == "generate_image":
-                            prompt = args.get("prompt")
-                            model_type = args.get("model_type", "stable-diffusion")
-                            image_path = args.get("image_path")
-                            result = await self._generate_image_request(prompt, model_type, image_path)
-                        elif fn_name == "execute_system_command":
-                            cmd = args.get("command")
-                            logger.info(f"Executing system command: {cmd}")
-                            import subprocess
-                            try:
-                                # Run command on host via subprocess
-                                # Note: We join with host_root logic if it targets files, but often commands are general
-                                process = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=15)
-                                result = process.stdout if process.returncode == 0 else f"Error ({process.returncode}): {process.stderr}"
-                            except Exception as e:
-                                result = f"Execution failed: {str(e)}"
-                        
-                        logger.info(f"Tool {fn_name} returned: {result[:100]}...")
+                        try:
+                            if fn_name == "search_files":
+                                found = await file_service.search_host(args.get("pattern"), root_dir=args.get("root"))
+                                result = f"Found files: {found}"
+                            elif fn_name == "read_file":
+                                res = await file_service.read_host_file(args.get("path"))
+                                result = res if res else "File not found or empty."
+                            elif fn_name == "save_file":
+                                saved = await file_service.write_host_file(args.get("path"), args.get("content"))
+                                result = f"File saved to: {saved}" if saved else "Failed to save file."
+                            elif fn_name == "analyze_image_file":
+                                b64 = await file_service.read_host_image(args.get("path"))
+                                if b64:
+                                    result = await self._vision_request(b64, args.get("prompt", "Describe this image."))
+                                else:
+                                    result = "Error: Could not read image."
+                            elif fn_name == "generate_image":
+                                result = await self._generate_image_request(args.get("prompt"), args.get("model_type", "stable-diffusion"), args.get("image_path"))
+                            elif fn_name == "execute_system_command":
+                                import subprocess
+                                # Handle 'cmd' alias (common hallucination)
+                                command = args.get("command") or args.get("cmd")
+                                if not command:
+                                    result = "Error: Missing 'command' argument."
+                                else:
+                                    p = subprocess.run(command, shell=True, capture_output=True, text=True, timeout=15)
+                                    result = p.stdout if p.returncode == 0 else f"Error: {p.stderr}"
+                            elif fn_name == "get_system_info":
+                                import platform
+                                import multiprocessing
+                                from datetime import datetime
+                                import subprocess
+                                # 1. Basic OS/Time
+                                now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                                os_info = f"{platform.system()} {platform.release()} ({platform.machine()})"
+                                cores = multiprocessing.cpu_count()
+                                
+                                # 2. GPU Info
+                                gpu_info = "None detected."
+                                try:
+                                    gp = subprocess.run(["nvidia-smi", "--query-gpu=gpu_name,memory.total,memory.used,utilization.gpu", "--format=csv,noheader,nounits"], capture_output=True, text=True, timeout=5)
+                                    if gp.returncode == 0: gpu_info = gp.stdout.strip()
+                                except: pass
+                                
+                                # 3. CPU/Performance
+                                cpu_usage = "Unknown"
+                                try:
+                                    cp = subprocess.run("top -bn1 | grep 'Cpu(s)' | awk '{print $2}'", shell=True, capture_output=True, text=True, timeout=2)
+                                    if cp.returncode == 0: cpu_usage = f"{cp.stdout.strip()}%"
+                                except: pass
 
-                        # Add the tool result to messages
-                        messages.append(message) # Add AI's tool call request
+                                result = (
+                                    "### [REAL-TIME SYSTEM DATA]\n"
+                                    f"- **Current Time**: {now}\n"
+                                    f"- **Host OS**: {os_info}\n"
+                                    f"- **CPU**: {cores} cores, {cpu_usage} usage\n"
+                                    f"- **GPU Status**: {gpu_info}"
+                                )
+                        except Exception as e:
+                            result = f"Exception executing tool: {str(e)}"
+
+                        if isinstance(result, str) and len(result) > 25000:
+                            result = await self._map_reduce_summarize(result)
+
                         messages.append({
                             "role": "tool",
                             "content": result,
                             "tool_call_id": tool_call.get("id")
                         })
 
-                    # 3. Get final response from LLM after tool execution
-                    final_response = await client.post(
+                    json_payload = {
+                        "model": target_model, 
+                        "messages": messages, 
+                        "stream": False, 
+                    }
+                    if include_tools:
+                        json_payload["tools"] = filtered_tools
+                        
+                    resp = await client.post(
                         f"{self.base_url}/api/chat",
-                        json={
-                            "model": target_model,
-                            "messages": messages,
-                            "stream": False,
-                        },
+                        json=json_payload,
                     )
-                    final_response.raise_for_status()
-                    data = final_response.json()
-                    ai_message = data["message"]["content"]
+                    resp.raise_for_status()
+                    message = resp.json().get("message", {})
+
+                final_answer = message.get("content", "")
+                if thoughts_buffer.strip():
+                    ai_message = f"{thoughts_buffer.strip()}\n\n{final_answer}".strip()
                 else:
-                    ai_message = message.get("content", "")
+                    ai_message = final_answer
 
                 # Store AI message to DB
                 await memory_service.add_message(conversation_id, "assistant", ai_message)
@@ -412,9 +533,27 @@ class BrainService:
             logger.error(f"Brain failure: {e}")
             return f"My thoughts are currently fragmented: {str(e)}"
 
-    def clear_memory(self, conversation_id: str):
-        # We don't really use this anymore as we store in DB, 
-        # but we could implement clearing a specific conversation
+    async def clear_memory(self, conversation_id: str):
+        await memory_service.clear_conversation(conversation_id)
+        await vector_service.delete_conversation(conversation_id)
+
+    async def _unload_ollama(self):
+        """Tells Ollama to unload all models from VRAM to make room for Image Gen."""
+        try:
+            logger.info(f"Unloading Ollama models ({self.active_model}, {settings.VISION_MODEL}) to free VRAM...")
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                # Unload the main thinking model
+                await client.post(
+                    f"{self.base_url}/api/generate", 
+                    json={"model": self.active_model, "keep_alive": 0}
+                )
+                # Unload the vision model
+                await client.post(
+                    f"{self.base_url}/api/generate", 
+                    json={"model": settings.VISION_MODEL, "keep_alive": 0}
+                )
+        except Exception as e:
+            logger.warning(f"Failed to unload Ollama models: {e}")
         pass
 
     async def _vision_request(self, b64_image: str, prompt: str) -> str:
@@ -443,13 +582,16 @@ class BrainService:
     async def _generate_image_request(self, prompt: str, model_type: str, image_path: Optional[str] = None) -> str:
         """Internal helper to call the Imagine service."""
         try:
+            # 1. First, tell Ollama to get out of the GPU
+            await self._unload_ollama()
+
             logger.info(f"Requesting image generation: '{prompt}' via {model_type} (Img2Img: {bool(image_path)})")
-            # Use a longer timeout for generation as it can take time
-            async with httpx.AsyncClient(timeout=120.0) as client:
+            # Increase timeout to 10 minutes: first-run model download is ~4GB
+            async with httpx.AsyncClient(timeout=600.0) as client:
                 payload = {
                     "prompt": prompt,
                     "model_type": model_type,
-                    "steps": 25 # Default
+                    "steps": 40 # Upgraded quality
                 }
                 
                 # If image_path is provided, read and encode it for Img2Img
@@ -482,13 +624,156 @@ class BrainService:
                         f.write(img_data)
                         
                     logger.info(f"Generated image saved to {filepath}")
-                    return f"Image generated successfully! Saved to: {filepath}"
+                    return f"Image generated successfully! Saved to: {filepath}\n\n![Generated Image](/generated/{filename})"
                 else:
                    return f"Generation failed: {data}"
 
+        except httpx.ReadTimeout:
+            logger.error("Image generation timed out.")
+            return "Generation timed out. Bipod is likely downloading the model weights for the first time (approx 4GB). Please wait a few minutes and try again — the download will continue in the background."
         except Exception as e:
             logger.error(f"Image generation failure: {e}")
-            return f"Failed to generate image: {str(e)}. Ensure the 'imagine' service is running."
+            return f"Failed to generate image: {str(e)}. If this is your first time, Bipod might still be downloading the model (4GB) or the 'imagine' service is starting up."
+
+    async def _map_reduce_summarize(self, text: str) -> str:
+        """Summarizes large text chunks using a Map-Reduce approach."""
+        chunk_size = 25000
+        chunks = [text[i:i + chunk_size] for i in range(0, len(text), chunk_size)]
+        
+        if len(chunks) == 1:
+            # Just a simple summary for one chunk
+            return await self._summarize_chunk(chunks[0])
+            
+        logger.info(f"Summarizing {len(chunks)} chunks via Map-Reduce...")
+        summaries = []
+        for i, chunk in enumerate(chunks):
+            logger.info(f"Mapping chunk {i+1}/{len(chunks)}...")
+            summary = await self._summarize_chunk(chunk)
+            summaries.append(summary)
+            
+        final_text = "\n\n".join(summaries)
+        return await self._summarize_chunk(final_text, is_final=True)
+
+    async def _summarize_chunk(self, text: str, is_final: bool = False) -> str:
+        """Calls the LLM to summarize a specific chunk of text."""
+        try:
+            prompt = (
+                "Summarize the following text. Focus on technical details, structure, and key logic flows. "
+                "Keep it concise but detailed enough for a developer to understand the core functionality. "
+                "Maintain specific variable names or function signatures if they are important."
+            )
+            if is_final:
+                prompt = "Synthesize the following summaries into a final, coherent overview. Preserve all technical specifics."
+
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                response = await client.post(
+                    f"{self.base_url}/api/chat",
+                    json={
+                        "model": settings.ACTIVE_MODEL,
+                        "messages": [
+                            {"role": "system", "content": prompt},
+                            {"role": "user", "content": text}
+                        ],
+                        "stream": False,
+                    }
+                )
+                response.raise_for_status()
+                return response.json()["message"]["content"]
+        except Exception as e:
+            logger.error(f"Summarization failed: {e}")
+            return text[:1000] + "... [Summary failed]"
+
+    def _check_for_hallucinated_tools(self, content: str) -> tuple[List[Dict], str]:
+        """Detects tool calls that the model output as plain text JSON instead of real tool_calls.
+        Returns (tool_calls, cleaned_content_without_json).
+        """
+        import json
+        import re
+        
+        # 1. Strip common model-specific markers
+        markers = ["<|python_tag|>", "<|action_tag|>", "```json", "```"]
+        cleaned_content = content
+        for marker in markers:
+            cleaned_content = cleaned_content.replace(marker, "")
+        
+        tool_calls = []
+        json_ranges = [] # Track where JSON was found to strip it later
+        
+        # 2. Extract JSON blocks using brace-counting
+        start_idx = -1
+        brace_count = 0
+        
+        for i, char in enumerate(cleaned_content):
+            if char == '{':
+                if brace_count == 0:
+                    start_idx = i
+                brace_count += 1
+            elif char == '}':
+                brace_count -= 1
+                if brace_count == 0 and start_idx != -1:
+                    potential_json = cleaned_content[start_idx:i+1]
+                    
+                    try:
+                        data = json.loads(potential_json)
+                        
+                        # Identify tool intent
+                        fn_name = data.get("name") or data.get("function", {}).get("name")
+                        args = data.get("parameters") or data.get("arguments") or data.get("function", {}).get("arguments")
+                        
+                        # Alias 'cmd' to 'command' for shell tool
+                        if fn_name == "shell" and args and "cmd" in args:
+                            args["command"] = args.pop("cmd")
+
+                        if fn_name and any(t["function"]["name"] == fn_name for t in self.tools):
+                            tool_calls.append({
+                                "id": f"call_{os.urandom(4).hex()}",
+                                "type": "function",
+                                "function": {
+                                    "name": fn_name,
+                                    "arguments": args
+                                }
+                            })
+                            json_ranges.append((start_idx, i+1))
+                    except:
+                        pass
+                    start_idx = -1
+        
+        # 3. Extract Function-like calls: tool_name("arg") or tool_name(arguments={...})
+        # This catches models that hallucinate direct function calls
+        func_pattern = r'(\w+)\((?:arguments=)?(\{.*?\}|"(.*?)")\)'
+        for match in re.finditer(func_pattern, cleaned_content):
+            fname = match.group(1)
+            raw_args = match.group(2)
+            str_arg = match.group(3)
+            
+            if any(t["function"]["name"] == fname for t in self.tools):
+                # Parse arguments
+                final_args = {}
+                if raw_args.startswith('{'):
+                    try: final_args = json.loads(raw_args)
+                    except: continue
+                elif str_arg:
+                    # Heuristic for shell tool or file tools
+                    if fname == "execute_system_command": final_args = {"command": str_arg}
+                    elif fname == "read_file": final_args = {"path": str_arg}
+                    elif fname == "search_files": final_args = {"pattern": str_arg}
+                
+                tool_calls.append({
+                    "id": f"call_{os.urandom(4).hex()}",
+                    "type": "function",
+                    "function": {
+                        "name": fname,
+                        "arguments": final_args
+                    }
+                })
+                json_ranges.append((match.start(), match.end()))
+
+        # 4. Strip identified blocks from the content to prevent leakage
+        final_text = cleaned_content
+        for start, end in reversed(json_ranges):
+            final_text = final_text[:start] + final_text[end:]
+            
+        return tool_calls, final_text.strip()
 
 brain_service = BrainService()
 

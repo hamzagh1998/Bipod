@@ -125,6 +125,17 @@ export function setupEventListeners() {
       e.preventDefault();
       createNewConversation();
     }
+    if (e.key === "Escape") {
+      dom.lightbox.classList.remove("active");
+    }
+  });
+
+  // Lightbox Close Events
+  dom.lightboxClose.addEventListener("click", () => {
+    dom.lightbox.classList.remove("active");
+  });
+  dom.lightboxOverlay.addEventListener("click", () => {
+    dom.lightbox.classList.remove("active");
   });
 
   // Auth Forms

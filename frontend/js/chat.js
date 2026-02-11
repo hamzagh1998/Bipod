@@ -33,6 +33,14 @@ export function appendMessage(role, text, shouldScroll = true) {
       hljs.highlightElement(block);
     });
 
+    // Add Lightbox support to all images in the AI response
+    contentDiv.querySelectorAll("img").forEach((img) => {
+      img.addEventListener("click", () => {
+        dom.lightboxImg.src = img.src;
+        dom.lightbox.classList.add("active");
+      });
+    });
+
     const actionsDiv = document.createElement("div");
     actionsDiv.className = "msg-actions";
     const copyBtn = document.createElement("button");

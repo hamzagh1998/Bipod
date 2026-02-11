@@ -22,13 +22,19 @@ current_model_id = None
 class GenerateRequest(BaseModel):
     prompt: str
     image: Optional[str] = None # Base64 encoded input image for img2img
-    negative_prompt: Optional[str] = "blurred, low quality, ugly, disfigured, watermark"
-    steps: int = 25
+    negative_prompt: Optional[str] = "blurred, low quality, ugly, disfigured, watermark, extra limbs, bad anatomy, out of focus, low res"
+    steps: int = 40
     strength: float = 0.75 # How much to transform the input image (0.0=min, 1.0=max)
     guidance_scale: float = 7.5
     width: int = 512
     height: int = 512
     model_type: str = "stable-diffusion"
+
+# Environment configuration for cache stability and memory efficiency
+os.environ["HF_HUB_DISABLE_SYMLINKS"] = "1"
+os.environ["PYTORCH_ALLOC_CONF"] = "expandable_segments:True"
+HF_HOME = os.environ.get("HF_HOME", "/app/models")
+OFFLINE_MODE = os.environ.get("OFFLINE_MODE", "true").lower() == "true"
 
 def get_device():
     if torch.cuda.is_available():
@@ -41,7 +47,7 @@ def load_model(model_type: str):
     global pipeline, current_model_id
     
     device = get_device()
-    logger.info(f"Loading model '{model_type}' on {device}...")
+    logger.info(f"Loading model '{model_type}' on {device} (Offline: {OFFLINE_MODE})...")
 
     if model_type == "dalle-mini":
         repo_id = "segmind/tiny-sd"
@@ -56,30 +62,73 @@ def load_model(model_type: str):
         torch.cuda.empty_cache()
 
     try:
+        common_args = {
+            "cache_dir": HF_HOME,
+            "local_files_only": OFFLINE_MODE,
+            "low_cpu_mem_usage": True,
+            "use_safetensors": None # Allow flexible loading
+        }
+
         if device == "cuda":
-            pipe = StableDiffusionPipeline.from_pretrained(
-                repo_id, 
-                torch_dtype=torch.float16,
-                use_safetensors=True
-            )
-            pipe.to("cuda")
+            try:
+                # First try default fp16 loading
+                pipe = StableDiffusionPipeline.from_pretrained(
+                    repo_id, 
+                    torch_dtype=torch.float16,
+                    variant="fp16",
+                    **common_args
+                )
+            except Exception as e:
+                logger.warning(f"Failed to load fp16 variant for {repo_id}, trying default: {e}")
+                pipe = StableDiffusionPipeline.from_pretrained(
+                    repo_id, 
+                    torch_dtype=torch.float32,
+                    variant=None,
+                    **common_args
+                )
+            
+            # Optimization: Try model offloading for much faster performance
+            # This is safe because Bipod unloads Ollama from VRAM before calling us.
+            try:
+                # Try model offload (faster than sequential)
+                pipe.enable_model_cpu_offload()
+                pipe.enable_attention_slicing()
+                logger.info("Enabled model CPU offloading and attention slicing.")
+            except Exception as opt_e:
+                logger.warning(f"Could not enable model CPU offloading: {opt_e}. Trying sequential fallback...")
+                try:
+                    pipe.enable_sequential_cpu_offload()
+                    pipe.enable_attention_slicing()
+                    logger.info("Enabled sequential CPU offloading fallback.")
+                except Exception as seq_e:
+                    logger.warning(f"Sequential offload also failed: {seq_e}. Falling back to CPU mode.")
+                    pipe = StableDiffusionPipeline.from_pretrained(
+                        repo_id, 
+                        torch_dtype=torch.float32,
+                        **common_args
+                    )
+                    pipe.to("cpu")
+                    pipe.enable_attention_slicing()
         else:
             pipe = StableDiffusionPipeline.from_pretrained(
                 repo_id, 
-                use_safetensors=True
+                **common_args
             )
             pipe.to("cpu")
             pipe.enable_attention_slicing()
 
-        pipe.scheduler = DPMSolverMultistepScheduler.from_config(pipe.scheduler.config)
+        pipe.scheduler = DPMSolverMultistepScheduler.from_config(pipe.scheduler.config, use_karras_sigmas=True)
         
         pipeline = pipe
         current_model_id = repo_id
-        logger.info(f"Model '{repo_id}' loaded successfully.")
+        logger.info(f"Model '{repo_id}' loaded successfully from {'local cache' if OFFLINE_MODE else 'Hub/cache'}.")
         return pipeline
     except Exception as e:
         logger.error(f"Failed to load model: {e}")
-        raise HTTPException(status_code=500, detail=f"Model loading failed: {str(e)}")
+        error_msg = str(e)
+        if OFFLINE_MODE and "Local look-up not found" in error_msg:
+            error_msg = f"Model '{repo_id}' not found in local cache. Please run 'docker exec -it bipod_imagine python preload.py' first."
+        raise HTTPException(status_code=500, detail=f"Model loading failed: {error_msg}")
 
 @app.post("/generate")
 async def generate_image(req: GenerateRequest):
