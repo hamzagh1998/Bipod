@@ -51,7 +51,7 @@ class BrainService:
             "4. DO NOT explain why you are using a tool unless it's a complex multi-step process.\n"
             "5. If a specialized tool exists (save_file, generate_image, search_files), use it instead of `execute_system_command`.\n"
             "6. EACH CONVERSATION IS INDEPENDENT. Do not mix up content from different sessions.\n"
-            "7. For image generation, the `model_type` MUST be either 'stable-diffusion' (default) or 'dalle-mini' (only if 'fast' or 'rough' is requested). DO NOT use any other words for `model_type`.\n"
+            "7. For image generation, the `model_type` MUST be one of: 'sdxl-lightning' (fast, default), 'flux-schnell' (photoreal - requires high VRAM), 'stable-diffusion' (balanced), or 'dalle-mini' (low resource). DO NOT use any other words for `model_type`.\n"
             "8. ALWAYS provide the actual file path returned by the tool when confirming a task (e.g. 'Image saved to /app/data/...'). If an image was generated, you MUST include the markdown preview (e.g. ![Generated Image](/generated/filename.jpg)) EXACTLY as returned by the tool so the user can see it in the chat.\n"
             "[SYSTEM: TOOLS]\n1. `read_file`: Reads text/PDF from the host. \n2. `save_file`: Writes text to the host. \n3. `move_file`: Moves/renames files/dirs on the host. Supports wildcards (e.g. *.pdf). \n4. `delete_file`: Deletes files/dirs on the host. Supports wildcards. \n5. `search_files`: Finds files by pattern. \n6. `execute_system_command`: Runs shell commands (use for complex tasks). Prefix host paths with /host.\n7. `get_system_info`: Returns CPU/GPU usage, model info, and current time. \n8. `web_search`: Searches the internet. \n9. `fetch_web_page`: Reads a URL.\n10. `organize_files`: Automatically sorts files in a directory into folders by their extension (e.g. 'pdf/', 'docx/').\n\n"
             "- If you decide to call a tool, you MUST NOT say anything. Your entire response must be ONLY the JSON tool call.\n"
@@ -144,7 +144,7 @@ class BrainService:
                         "properties": {
                             "prompt": {"type": "string", "description": "Description of the image. For best results, Bipod will expand this with quality tags like 'cinematic lighting, 8k, highly detailed, masterpiece'."},
                             "image_path": {"type": "string", "description": "Optional. Path to an existing image file to use for variations."},
-                            "model_type": {"type": "string", "enum": ["stable-diffusion-xl", "dalle-mini"], "description": "Model to use. Default 'stable-diffusion-xl'."},
+                            "model_type": {"type": "string", "enum": ["sdxl-lightning", "flux-schnell", "stable-diffusion", "dalle-mini"], "description": "Model to use. Default 'sdxl-lightning'."},
                         },
                         "required": ["prompt"],
                     },
@@ -819,7 +819,7 @@ class BrainService:
             logger.error(f"Vision tool failure: {e}")
             return f"Error analyzing image: {str(e)}"
 
-    async def _generate_image_request(self, prompt: str, model_type: str = "stable-diffusion-xl", image_path: Optional[str] = None) -> str:
+    async def _generate_image_request(self, prompt: str, model_type: str = "sdxl-lightning", image_path: Optional[str] = None) -> str:
         """Internal helper to call the Imagine service."""
         try:
             # 1. First, tell Ollama to get out of the GPU

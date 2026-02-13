@@ -198,9 +198,9 @@
                     <div class="setting-group">
                       <label for="model-select">Model Tier</label>
                       <select id="model-select">
-                        <option value="llama3.2:3b">Medium (3b)</option>
-                        <option value="llama3.1:8b">Heavy (8b)</option>
-                        <option value="llama3.2:1b">Light (1b)</option>
+                        <option value="loading" disabled selected>
+                          Loading Models...
+                        </option>
                       </select>
                     </div>
                     <div class="setting-group">
@@ -214,19 +214,13 @@
                     <div class="setting-group">
                       <label for="imagine-model-select">Imagine Model</label>
                       <select id="imagine-model-select">
-                        <option value="stable-diffusion-xl">
-                          Ultra Quality (SDXL)
-                        </option>
-                        <option value="stable-diffusion">
-                          Standard (SD 1.5)
-                        </option>
-                        <option value="dalle-mini">
-                          TinySD (CPU Optimized)
+                        <option value="loading" disabled selected>
+                          Loading Models...
                         </option>
                       </select>
                     </div>
                     <div id="hardware-info-badge" class="hardware-info-badge">
-                      <!-- Will be filled by JS: "⚡ RTX 4050 6GB detected" -->
+                      <!-- Filled by JS -->
                     </div>
                   </div>
                 </div>

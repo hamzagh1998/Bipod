@@ -130,26 +130,29 @@ class Settings(BaseSettings):
 
     
     # Brain tiers
-    HEAVY_MODEL: str = "llama3.1:8b"   # For PC + GPU
-    MEDIUM_MODEL: str = "llama3.2:3b"  # For PC + CPU
-    LIGHT_MODEL: str = "llama3.2:1b"   # For Pi 5 / ARM64
-    VISION_MODEL: str = "moondream"    # Specialized for eyes
-    EMBEDDING_MODEL: str = "nomic-embed-text" # Small, local embeddings
+    SMART_MODEL: str = "qwen2.5:7b"      # Best for tool calling & precision
+    HEAVY_MODEL: str = "llama3.1:8b"     # High intelligence, creative baseline
+    MEDIUM_MODEL: str = "llama3.2:3b"    # For standard PC / CPU fallback
+    LIGHT_MODEL: str = "llama3.2:1b"     # For Pi 5 / Edge devices
+    VISION_MODEL: str = "moondream"      # Specialized for image analysis
+    EMBEDDING_MODEL: str = "nomic-embed-text" # Local vector embeddings
 
     # Imagine tiers
-    IMAGINE_SDXL_MODEL: str = "stable-diffusion-xl" # High Quality (SDXL)
-    IMAGINE_SD_MODEL: str = "stable-diffusion"     # Medium Quality (SD 1.5)
+    IMAGINE_FLUX_MODEL: str = "flux-schnell"     # Photoreal Quality
+    IMAGINE_SDXL_MODEL: str = "sdxl-lightning"   # High Quality (Fast)
+    IMAGINE_SD_MODEL: str = "stable-diffusion"   # Medium Quality (SD 1.5)
     IMAGINE_TINY_MODEL: str = "dalle-mini"       # Low Quality / CPU
 
     @computed_field
     @property
     def ACTIVE_MODEL(self) -> str:
-        """Dynamically picks the best brain based on detected hardware."""
+        """Dynamically picks the best default brain based on detected hardware."""
         if self.HARDWARE_TARGET == "arm64":
             return self.LIGHT_MODEL
-        if self.USE_GPU:
-            return self.HEAVY_MODEL
-        return self.MEDIUM_MODEL
+        if not self.USE_GPU:
+            return self.MEDIUM_MODEL
+        # For GPU users, recommend the creative heavy hitter by default
+        return self.HEAVY_MODEL
 
     @computed_field
     @property
@@ -157,7 +160,9 @@ class Settings(BaseSettings):
         """Dynamically picks the best imagine model."""
         if not self.USE_GPU:
             return self.IMAGINE_TINY_MODEL
-        if self.GPU_VRAM >= 5.5: # 6GB cards usually show ~5.8GB
+        if self.GPU_VRAM >= 12.0:
+            return self.IMAGINE_FLUX_MODEL
+        if self.GPU_VRAM >= 5.5: 
             return self.IMAGINE_SDXL_MODEL
         return self.IMAGINE_SD_MODEL
 

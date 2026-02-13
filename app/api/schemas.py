@@ -48,7 +48,7 @@ class ChatRequest(BaseModel):
     conversation_id: str
     model_id: Optional[str] = None
     reasoning_mode: Optional[str] = None
-    imagine_model: Optional[str] = None # 'stable-diffusion' or 'dalle-mini'
+    imagine_model: Optional[str] = None # 'sdxl-lightning', 'flux-schnell', etc.
     attachments: Optional[List[Attachment]] = None
 
 class ChatResponse(BaseModel):

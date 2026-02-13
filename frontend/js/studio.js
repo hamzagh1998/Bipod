@@ -81,35 +81,42 @@ const getModeButtons = () => document.querySelectorAll(".mode-toggle button");
 const getAspectButtons = () => document.querySelectorAll(".aspect-grid button");
 
 // --- Initialization ---
+
 async function init() {
-  console.log("🚀 Bipod Studio Init v1.1 starting...");
-  setupMarkdown();
+  console.log("🚀 Bipod Studio Init starting...");
+
+  // Ensure libraries are loaded before calling setup
+  if (typeof marked !== "undefined" && typeof hljs !== "undefined") {
+    setupMarkdown();
+  } else {
+    console.warn(
+      "Markdown/Highlight.js not found. Deferring UI utility setup.",
+    );
+  }
 
   try {
     await checkAuthStatus();
-    console.log("Auth check complete. state.currentUser:", state.currentUser);
   } catch (err) {
     console.error("Auth check failed:", err);
   }
 
   if (!state.authToken) {
-    console.warn("No auth token, redirecting to home.");
     window.location.href = "/";
     return;
   }
 
-  // Explicitly set username right away
+  // Set username
   if (state.currentUser && studioDom.currentUsernameSpan) {
-    console.log("Setting username to:", state.currentUser.username);
     studioDom.currentUsernameSpan.innerText = state.currentUser.username;
-  } else {
-    console.warn("User data or span missing:", state.currentUser);
   }
 
   setupEventListeners();
-  await fetchHardwareStats();
 
-  updateEstimates();
+  // Don't await this so UI can finish init faster
+  fetchHardwareStats().finally(() => {
+    updateEstimates();
+  });
+
   console.log("✅ Studio Initialization complete.");
 }
 
@@ -145,15 +152,19 @@ function setupEventListeners() {
     studioDom.modelSelect.addEventListener("change", (e) => {
       studioState.model = e.target.value;
       if (studioDom.stepsInput) {
-        if (studioState.model === "sdxl-turbo") {
-          studioDom.stepsInput.value = 1;
-        } else if (studioState.model === "sdxl-lightning") {
+        if (
+          studioState.model === "sdxl-lightning" ||
+          studioState.model === "flux-schnell"
+        ) {
           studioDom.stepsInput.value = 4;
+        } else if (studioState.model === "sdxl-turbo") {
+          studioDom.stepsInput.value = 1;
         } else {
           studioDom.stepsInput.value = 30;
         }
         studioDom.stepsInput.dispatchEvent(new Event("input"));
       }
+      updateModelCapabilities();
       updateEstimates();
     });
   }
@@ -166,22 +177,12 @@ function setupEventListeners() {
         btn.classList.add("active");
         studioState.mode = btn.dataset.mode;
 
-        // Show upload group for both img2img and img2video
+        // Show upload group for img2img
         if (studioDom.imgUploadGroup) {
           studioDom.imgUploadGroup.style.display =
-            studioState.mode === "image-to-image" ||
-            studioState.mode === "image-to-video"
-              ? "block"
-              : "none";
+            studioState.mode === "image-to-image" ? "block" : "none";
         }
-
-        // Auto-switch model to SVD-XT if entering video mode
-        if (studioState.mode === "image-to-video") {
-          if (studioDom.modelSelect) {
-            studioDom.modelSelect.value = "svd-xt";
-            studioDom.modelSelect.dispatchEvent(new Event("input"));
-          }
-        }
+        updateEstimates();
       });
     });
   }
@@ -308,6 +309,11 @@ async function fetchHardwareStats() {
 
       // Enforce resolution limits
       enforceHardwareConstraints(config);
+
+      // Populate models
+      if (config.available_imagine_models) {
+        populateModels(config.available_imagine_models);
+      }
     } else {
       console.warn("Hardware fetch returned status:", resp.status);
       if (studioDom.gpuName)
@@ -321,8 +327,9 @@ async function fetchHardwareStats() {
 
 function enforceHardwareConstraints(config) {
   if (!config.use_gpu || config.gpu_vram < 6) {
-    if (studioDom.aspectButtons) {
-      studioDom.aspectButtons.forEach((btn) => {
+    const aspectButtons = getAspectButtons();
+    if (aspectButtons) {
+      aspectButtons.forEach((btn) => {
         const w = parseInt(btn.dataset.width);
         const h = parseInt(btn.dataset.height);
         if (w > 1024 || h > 1024) {
@@ -332,6 +339,89 @@ function enforceHardwareConstraints(config) {
       });
     }
   }
+}
+
+function populateModels(models) {
+  if (!studioDom.modelSelect) return;
+
+  const currentVal = studioDom.modelSelect.value;
+  studioDom.modelSelect.innerHTML = "";
+
+  models.forEach((model) => {
+    // Skip Flux if not available (VRAM constraint)
+    if (model.id === "flux-schnell" && model.available === false) {
+      return;
+    }
+
+    const option = document.createElement("option");
+    option.value = model.id;
+    option.textContent = model.name;
+    studioDom.modelSelect.appendChild(option);
+  });
+
+  // Try to restore previous value if it still exists
+  if ([...studioDom.modelSelect.options].some((o) => o.value === currentVal)) {
+    studioDom.modelSelect.value = currentVal;
+  } else if (studioDom.modelSelect.options.length > 0) {
+    studioState.model = studioDom.modelSelect.value;
+  }
+
+  updateModelCapabilities();
+}
+
+function updateModelCapabilities() {
+  const selectedModelId = studioDom.modelSelect?.value;
+  if (!selectedModelId || !studioState.hardware?.available_imagine_models)
+    return;
+
+  const model = studioState.hardware.available_imagine_models.find(
+    (m) => m.id === selectedModelId,
+  );
+  if (!model) return;
+
+  // Toggle Negative Prompt
+  if (studioDom.negativePrompt) {
+    const group = studioDom.negativePrompt.closest(".control-group");
+    if (group) {
+      group.style.opacity =
+        model.supports_negative_prompt === false ? "0.5" : "1";
+      studioDom.negativePrompt.disabled =
+        model.supports_negative_prompt === false;
+      if (model.supports_negative_prompt === false) {
+        studioDom.negativePrompt.title = "Not supported by this model";
+      } else {
+        studioDom.negativePrompt.title = "";
+      }
+    }
+  }
+
+  // Toggle Img2Img / Mode Buttons
+  const modeButtons = getModeButtons();
+  modeButtons.forEach((btn) => {
+    if (btn.dataset.mode === "image-to-image") {
+      btn.disabled = model.supports_img2img === false;
+      btn.title =
+        model.supports_img2img === false ? "Not supported by this model" : "";
+
+      // If we were in img2img and it's now disabled, switch to text-to-image
+      if (studioState.mode === "image-to-image" && btn.disabled) {
+        const t2iBtn = [...modeButtons].find(
+          (b) => b.dataset.mode === "text-to-image",
+        );
+        if (t2iBtn) t2iBtn.click();
+      }
+    }
+
+    // Video mode - handle specially as it's often separate
+    if (btn.dataset.mode === "image-to-video") {
+      // Only enable if we have a video model (like svd-xt) - though the user removed it for now
+      const hasVideoModel = studioState.hardware.available_imagine_models.some(
+        (m) => m.id === "svd-xt",
+      );
+      btn.disabled = !hasVideoModel;
+      btn.style.display = hasVideoModel ? "block" : "none";
+    }
+  });
 }
 
 function updateEstimates() {
@@ -347,7 +437,8 @@ function updateEstimates() {
   else if (gpuName.includes("4080") || gpuName.includes("3090")) gpuScore = 100;
   else if (gpuName.includes("4070") || gpuName.includes("3080")) gpuScore = 80;
   else if (gpuName.includes("4060") || gpuName.includes("3070")) gpuScore = 60;
-  else if (gpuName.includes("3060")) gpuScore = 40;
+  else if (gpuName.includes("4050") || gpuName.includes("3060")) gpuScore = 40;
+  else if (gpuName.includes("3050")) gpuScore = 30;
   else if (!studioState.hardware?.use_gpu) gpuScore = 5; // CPU is slow
 
   const steps = studioState.steps;
@@ -360,6 +451,7 @@ function updateEstimates() {
 
   if (studioState.model === "sdxl-turbo") estPerImage *= 0.8;
   if (studioState.model === "sdxl-lightning") estPerImage *= 1.2;
+  if (studioState.model === "flux-schnell") estPerImage *= 4.5; // Flux is significantly heavier
 
   const totalEst = estPerImage * studioState.batchSize + overhead;
   if (studioDom.timeEstimate)
@@ -409,19 +501,6 @@ async function handleGenerate() {
       let endpoint = "/api/v1/generate";
       let requestPayload = payload;
 
-      if (studioState.mode === "image-to-video") {
-        endpoint = "/api/v1/generate-video";
-        requestPayload = {
-          image: studioState.inputImage,
-          motion_bucket_id: 127,
-          noise_aug_strength: 0.02,
-          fps: 7,
-          num_frames: 25,
-          num_inference_steps: 25,
-          output_format: "mp4",
-        };
-      }
-
       const resp = await fetch(endpoint, {
         method: "POST",
         headers: {
@@ -434,11 +513,7 @@ async function handleGenerate() {
       if (!resp.ok) throw new Error(await resp.text());
       const data = await resp.json();
 
-      if (studioState.mode === "image-to-video") {
-        results.push({ type: "video", data: data.video_base64 });
-      } else {
-        results.push({ type: "image", data: data.image_base64 });
-      }
+      results.push({ type: "image", data: data.image_base64 });
     }
 
     displayBatchResults(results);

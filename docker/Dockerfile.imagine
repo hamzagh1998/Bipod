@@ -12,14 +12,20 @@ RUN apt-get update && apt-get install -y \
     libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt .
-# Install dependencies (CPU/GPU generic for now, torch comes with cu118 url in reqs)
-RUN pip install --no-cache-dir -r requirements.txt
+# 1. Install heavy ML base first (large downloads)
+RUN pip install --no-cache-dir --timeout 1000 --retries 10 \
+    torch torchvision --index-url https://download.pytorch.org/whl/cu121
 
-# Copy application code
+# 2. Install xformers and bitsandbytes (often problematic)
+RUN pip install --no-cache-dir --timeout 1000 --retries 10 \
+    xformers bitsandbytes
+
+COPY requirements.txt .
+
+RUN pip install --no-cache-dir --timeout 1000 --retries 10 -r requirements.txt
+
 COPY . .
 
-# Create cache directory for models
 RUN mkdir -p /app/models
 ENV HF_HOME=/app/models
 

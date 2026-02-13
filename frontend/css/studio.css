@@ -7,8 +7,17 @@
   display: flex;
   flex-direction: column;
   height: 100%;
+  padding: 0;
   gap: 20px;
   animation: fadeIn 0.5s ease;
+  overflow: hidden;
+}
+
+.studio-main {
+  overflow: hidden !important;
+  display: flex !important;
+  flex-direction: column !important;
+  padding: 16px 20px !important;
 }
 
 .studio-header {
@@ -52,9 +61,12 @@
 .studio-workspace {
   display: grid;
   grid-template-columns: 350px 1fr;
+  grid-template-rows: minmax(0, 1fr);
   gap: 20px;
   flex: 1;
   min-height: 0;
+  height: calc(100vh - 160px);
+  /* Account for header, footer and padding */
 }
 
 .glass-panel {
@@ -187,8 +199,11 @@
 #studio-input-preview {
   margin-top: 10px;
   width: 100%;
+  max-height: 220px;
+  object-fit: contain;
   border-radius: var(--radius-md);
   border: 1px solid var(--border-color);
+  background: rgba(0, 0, 0, 0.2);
 }
 
 /* Aspect Grid */
@@ -273,9 +288,13 @@ input[type="range"]::-webkit-slider-thumb:hover {
   gap: 4px;
   cursor: pointer;
   transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
-  margin-top: 10px;
+  margin-top: auto;
+  /* Push to bottom of scroll area if content is thin */
+  flex-shrink: 0;
+  /* Don't squeeze button */
   position: relative;
   overflow: hidden;
+  margin-bottom: 4px;
 }
 
 .generate-btn:hover {

@@ -7,9 +7,6 @@ transformers
 scipy
 ftfy
 safetensors
-xformers
-bitsandbytes
+timm
 sentencepiece
 protobuf
-torch --index-url https://download.pytorch.org/whl/cu121
-timm

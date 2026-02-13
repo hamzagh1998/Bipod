@@ -50,12 +50,19 @@ async def get_system_config():
         "gpu_vram": round(total_vram, 2),
         "vram_tier": vram_tier,
         "active_brain_model": settings.ACTIVE_MODEL,
+        "available_brain_models": [
+            {"id": settings.SMART_MODEL, "name": "Smart (7b)", "tier": "Heavy", "req": "8GB+ VRAM"},
+            {"id": settings.HEAVY_MODEL, "name": "Heavy (8b)", "tier": "Heavy", "req": "8GB+ VRAM/RAM"},
+            {"id": settings.MEDIUM_MODEL, "name": "Medium (3b)", "tier": "Medium", "req": "4GB+ RAM"},
+            {"id": settings.LIGHT_MODEL, "name": "Light (1b)", "tier": "Light", "req": "1GB+ RAM"},
+        ],
         "active_imagine_model": settings.ACTIVE_IMAGINE_MODEL,
         "available_imagine_models": imagine_models if imagine_models else [
              # Fallback list if service is unreachable
-            {"id": "stable-diffusion-xl", "name": "Ultra Quality (SDXL Lightning)", "req": "6GB+ VRAM"},
-            {"id": "stable-diffusion", "name": "Standard Quality", "req": "4GB+ VRAM"},
-            {"id": "dalle-mini", "name": "Low Quality / CPU", "req": "None (CPU)"}
+            {"id": "sdxl-lightning", "name": "SDXL Lightning (Fast)", "req": "8GB+ VRAM", "supports_img2img": True, "supports_negative_prompt": True},
+            {"id": "stable-diffusion", "name": "Realistic Vision V6", "req": "4GB+ VRAM", "supports_img2img": True, "supports_negative_prompt": True},
+            {"id": "flux-schnell", "name": "Flux.1-schnell (4-bit, Photorealism)", "req": "10GB+ VRAM", "supports_img2img": False, "supports_negative_prompt": False, "available": total_vram >= 5.5},
+            {"id": "dalle-mini", "name": "Tiny-SD (CPU)", "req": "None (CPU)", "supports_img2img": True, "supports_negative_prompt": True}
         ]
     }
 
