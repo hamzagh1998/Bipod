@@ -13,7 +13,9 @@ export async function checkAuthStatus() {
     const res = await apiFetch("/auth/me");
     if (res.ok) {
       state.currentUser = await res.json();
-      dom.currentUsernameSpan.innerText = state.currentUser.username;
+      if (dom.currentUsernameSpan) {
+        dom.currentUsernameSpan.innerText = state.currentUser.username;
+      }
       hideAuth();
       await fetchConversations();
     } else {
@@ -25,15 +27,19 @@ export async function checkAuthStatus() {
 }
 
 export function showAuth() {
-  dom.authOverlay.classList.remove("hidden");
-  dom.authOverlay.style.opacity = "1";
-  dom.authOverlay.style.pointerEvents = "auto";
+  if (dom.authOverlay) {
+    dom.authOverlay.classList.remove("hidden");
+    dom.authOverlay.style.opacity = "1";
+    dom.authOverlay.style.pointerEvents = "auto";
+  }
 }
 
 export function hideAuth() {
-  dom.authOverlay.style.opacity = "0";
-  dom.authOverlay.style.pointerEvents = "none";
-  setTimeout(() => dom.authOverlay.classList.add("hidden"), 400);
+  if (dom.authOverlay) {
+    dom.authOverlay.style.opacity = "0";
+    dom.authOverlay.style.pointerEvents = "none";
+    setTimeout(() => dom.authOverlay.classList.add("hidden"), 400);
+  }
 }
 
 export function handleLogout() {
@@ -43,8 +49,10 @@ export function handleLogout() {
   state.currentConversationId = null;
   state.conversations = [];
   renderConversations();
-  dom.chatWindow.innerHTML = "";
-  dom.chatWindow.appendChild(dom.loadingIndicator);
+  if (dom.chatWindow) {
+    dom.chatWindow.innerHTML = "";
+    dom.chatWindow.appendChild(dom.loadingIndicator);
+  }
   showAuth();
 }
 

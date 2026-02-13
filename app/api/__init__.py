@@ -46,6 +46,7 @@ async def get_system_config():
     return {
         "hardware": settings.HARDWARE_TARGET,
         "use_gpu": settings.USE_GPU,
+        "gpu_name": imagine_system.get("gpu_name") or settings.GPU_NAME,
         "gpu_vram": round(total_vram, 2),
         "vram_tier": vram_tier,
         "active_brain_model": settings.ACTIVE_MODEL,

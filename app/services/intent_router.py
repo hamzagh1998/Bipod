@@ -127,6 +127,20 @@ class IntentRouter:
                 "what does this website say",
                 "extract text from page",
                 "visit the website",
+            ],
+            "troubleshooting": [
+                "check this",
+                "what's the issue",
+                "check these command and tell me what's the issue",
+                "fix this error",
+                "why is this failing",
+                "debug this stack trace",
+                "what does this error mean",
+                "analyze this log",
+                "help me fix this bug",
+                "why is it not connecting",
+                "resolve this exception",
+                "troubleshoot this problem",
             ]
         }
         
@@ -204,11 +218,17 @@ class IntentRouter:
             "web_search": ["web_search", "fetch_web_page"],
             "fetch_web_page": ["fetch_web_page", "web_search"],
             "image_generation": ["generate_image"],
-            "system_info": ["get_system_info", "execute_system_command", "read_file"],
-            "file_operation": ["read_file", "save_file", "search_files", "execute_system_command", "move_file", "delete_file", "organize_files"],
-            "coding": ["save_file", "read_file", "search_files", "move_file", "organize_files"],
-            "shell_command": ["execute_system_command", "search_files", "get_system_info", "organize_files"],
-            "vision_analysis": ["analyze_image_file"],
+            # System info often needs to execute commands or read files to get data
+            "system_info": ["get_system_info", "execute_system_command", "read_file", "web_search"],
+            # File operations might need search if user asks "find a file about X" (not just filename)
+            "file_operation": ["read_file", "save_file", "search_files", "execute_system_command", "move_file", "delete_file", "organize_files", "web_search"],
+            # Coding needs context (read files), execution (run scripts), and docs (web search)
+            "coding": ["save_file", "read_file", "search_files", "move_file", "organize_files", "execute_system_command", "web_search"],
+            # Shell commands almost always need search for flags/errors and reading logs
+            "shell_command": ["execute_system_command", "search_files", "get_system_info", "organize_files", "read_file", "web_search"],
+            "vision_analysis": ["analyze_image_file", "web_search"],
+            # Troubleshooting is a mix of all: searching docs, reading code/logs, executing diagnostic commands
+            "troubleshooting": ["web_search", "read_file", "search_files", "execute_system_command", "get_system_info", "fetch_web_page"]
         }
         
         allowed_tool_names = intent_map.get(intent, [])

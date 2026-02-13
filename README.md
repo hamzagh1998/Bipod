@@ -112,6 +112,42 @@ docker exec -it bipod_ollama ollama pull llama3.2:1b
 docker exec -it bipod_ollama ollama pull moondream
 ```
 
+## 🎨 Imagine Studio & Image/video Generation
+
+Bipod features a professional-grade **Imagine Studio** for high-quality, local image and video generation.
+
+### ✨ Features
+
+- **Standalone Page**: Dedicated workspace for creation.
+- **SDXL Suite**: Industry-standard high-speed generation (Lightning, Turbo, Base 1.0).
+- **Video Generation (SVD-XT)**: Transform images into cinematic 25-frame videos (Stable Video Diffusion).
+- **Hardware Aware**: Dynamic resolution and frame limits based on your GPU VRAM tier.
+- **AI Upscaling**: Integrated 2x upscaling using Swin2SR.
+- **Batch Processing**: Generate multiple variations simultaneously.
+
+### 🚀 Preloading Models (Recommended)
+
+To avoid long wait times during your first session, pre-download the model suite (~35 GB total including Video models).
+
+```bash
+docker exec -it bipod_imagine python preload.py
+```
+
+_Once complete, Bipod can generate images and videos entirely offline._
+
+### ⚙️ Hardware Optimization
+
+Bipod automatically detects your GPU and scales the engine:
+
+| Tier       | Quality   | VRAM Target | Video Capability                    |
+| :--------- | :-------- | :---------- | :---------------------------------- |
+| **Ultra**  | 2048x2048 | 24GB+       | 1024x576, 25 FPS, No Offload        |
+| **High**   | 1536x1024 | 12-16GB     | 1024x576, 25 FPS, Model Offload     |
+| **Medium** | 1024x1024 | 8-10GB      | 768x432, 25 FPS, Model Offload      |
+| **Low**    | 512x512   | <6GB        | 512x288, 14 FPS, Aggressive Offload |
+
+_Bipod ensures stability by applying tiling and slicing optimizations for lower-tier hardware._
+
 ## 🔋 Edge Device Support (Raspberry Pi)
 
 Bipod is designed to scale down. On devices without a GPU, it gracefully falls back to:

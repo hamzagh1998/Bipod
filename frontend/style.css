@@ -107,38 +107,75 @@ body {
     letter-spacing: -0.02em;
 }
 
-/* Sidebar Header */
-.sidebar-header {
-    display: flex;
-    flex-direction: column;
-    gap: 0;
+.sidebar button.nav-btn,
+#new-chat-btn,
+#studio-nav-btn,
+#back-to-chat {
+    all: unset !important;
+    box-sizing: border-box !important;
+    appearance: none !important;
+    -webkit-appearance: none !important;
+    width: 100% !important;
+    margin-bottom: 8px !important;
+    padding: 10px 16px !important;
+    border-radius: var(--radius-md) !important;
+    border: 1px solid var(--border-color) !important;
+    background-color: var(--hover-bg) !important;
+    color: var(--text-secondary) !important;
+    font-family: inherit !important;
+    font-size: 0.88rem !important;
+    font-weight: 500 !important;
+    cursor: pointer !important;
+    display: flex !important;
+    align-items: center !important;
+    gap: 12px !important;
+    transition: all var(--transition-fast) !important;
+    text-align: left !important;
+    outline: none !important;
 }
 
-.btn-primary {
-    width: 100%;
-    background: var(--hover-bg);
-    border: 1px dashed var(--border-hover);
-    color: var(--text-secondary);
-    padding: 10px 14px;
-    border-radius: var(--radius-md);
-    font-family: inherit;
-    font-size: 0.85rem;
-    cursor: pointer;
-    transition: all var(--transition-fast);
-    display: flex;
-    align-items: center;
-    gap: 8px;
+.sidebar button.nav-btn:hover,
+#new-chat-btn:hover,
+#studio-nav-btn:hover,
+#back-to-chat:hover {
+    background-color: var(--hover-bg-strong) !important;
+    border-color: var(--border-hover) !important;
+    color: var(--text-main) !important;
 }
 
-.btn-primary:hover {
-    background: var(--hover-bg-strong);
-    border-color: var(--accent-primary);
-    color: var(--text-main);
+/* Primary Variant (New Chat) */
+.sidebar button.nav-btn.primary {
+    background: linear-gradient(135deg, rgba(138, 43, 226, 0.15), rgba(168, 85, 247, 0.08)) !important;
+    border: 1px solid rgba(138, 43, 226, 0.4) !important;
+    color: #fff !important;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
 }
 
-.btn-primary .material-symbols-rounded {
-    font-size: 18px;
-    color: var(--accent-soft);
+.sidebar button.nav-btn.primary:hover {
+    background: linear-gradient(135deg, rgba(138, 43, 226, 0.25), rgba(168, 85, 247, 0.15)) !important;
+    border-color: var(--accent-primary) !important;
+    box-shadow: 0 6px 20px rgba(138, 43, 226, 0.25);
+}
+
+.sidebar button.nav-btn.primary .material-symbols-rounded {
+    color: var(--accent-soft) !important;
+}
+
+/* Secondary Variant (Studio) */
+.sidebar button.nav-btn.secondary-nav {
+    background-color: rgba(255, 255, 255, 0.03) !important;
+    border: 1px solid rgba(255, 255, 255, 0.08) !important;
+    color: var(--text-secondary) !important;
+}
+
+.sidebar button.nav-btn.secondary-nav:hover {
+    background-color: rgba(255, 255, 255, 0.07) !important;
+    border-color: rgba(255, 255, 255, 0.15) !important;
+    color: var(--text-main) !important;
+}
+
+.sidebar button.nav-btn .material-symbols-rounded {
+    font-size: 20px !important;
 }
 
 .shortcut-hint {
@@ -1115,7 +1152,15 @@ footer {
     display: flex;
     align-items: center;
     justify-content: center;
-    transition: opacity 0.4s ease;
+    transition: opacity 0.4s ease, visibility 0.4s ease;
+    opacity: 1;
+    visibility: visible;
+}
+
+.auth-overlay.hidden {
+    opacity: 0;
+    pointer-events: none;
+    visibility: hidden;
 }
 
 .auth-card {

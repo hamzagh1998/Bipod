@@ -12,8 +12,9 @@ async function init() {
   const savedModel = localStorage.getItem("bipod_model");
   const savedMode = localStorage.getItem("bipod_mode");
   const savedImagine = localStorage.getItem("bipod_imagine_model");
-  if (savedModel) dom.modelSelect.value = savedModel;
-  if (savedMode) dom.modeSelect.value = savedMode;
+
+  if (savedModel && dom.modelSelect) dom.modelSelect.value = savedModel;
+  if (savedMode && dom.modeSelect) dom.modeSelect.value = savedMode;
 
   // Check hardware capabilities for Imagine models
   try {
@@ -33,42 +34,49 @@ async function init() {
       }
 
       // Dynamic Model Selection & Validation
-      const xlOption = dom.imagineModelSelect.querySelector(
-        'option[value="stable-diffusion-xl"]',
-      );
-      const sdOption = dom.imagineModelSelect.querySelector(
-        'option[value="stable-diffusion"]',
-      );
+      if (dom.imagineModelSelect) {
+        const xlOption = dom.imagineModelSelect.querySelector(
+          'option[value="stable-diffusion-xl"]',
+        );
+        const sdOption = dom.imagineModelSelect.querySelector(
+          'option[value="stable-diffusion"]',
+        );
 
-      if (!config.use_gpu) {
-        xlOption.disabled = true;
-        xlOption.innerText += " (GPU Required)";
-        sdOption.disabled = true;
-        sdOption.innerText += " (GPU Required)";
-        dom.imagineModelSelect.value = "dalle-mini";
-      } else if (config.gpu_vram < 5.5) {
-        xlOption.disabled = true;
-        xlOption.innerText += " (6GB VRAM Required)";
-        dom.imagineModelSelect.value = "stable-diffusion";
-      } else {
-        // High-end hardware: Default to SDXL
-        dom.imagineModelSelect.value = config.active_imagine_model;
-      }
+        if (!config.use_gpu) {
+          if (xlOption) {
+            xlOption.disabled = true;
+            xlOption.innerText += " (GPU Required)";
+          }
+          if (sdOption) {
+            sdOption.disabled = true;
+            sdOption.innerText += " (GPU Required)";
+          }
+          dom.imagineModelSelect.value = "dalle-mini";
+        } else if (config.gpu_vram < 5.5) {
+          if (xlOption) {
+            xlOption.disabled = true;
+            xlOption.innerText += " (6GB VRAM Required)";
+          }
+          dom.imagineModelSelect.value = "stable-diffusion";
+        } else {
+          dom.imagineModelSelect.value = config.active_imagine_model;
+        }
 
-      // Allow saved preference to override if valid
-      if (
-        savedImagine &&
-        !dom.imagineModelSelect.querySelector(`option[value="${savedImagine}"]`)
-          .disabled
-      ) {
-        dom.imagineModelSelect.value = savedImagine;
+        if (savedImagine) {
+          const opt = dom.imagineModelSelect.querySelector(
+            `option[value="${savedImagine}"]`,
+          );
+          if (opt && !opt.disabled) {
+            dom.imagineModelSelect.value = savedImagine;
+          }
+        }
       }
 
       // Auto-select the right Brain Model Tier
-      if (config.active_brain_model) {
+      if (config.active_brain_model && dom.modelSelect) {
         dom.modelSelect.value = config.active_brain_model;
       }
-      if (savedModel) dom.modelSelect.value = savedModel;
+      if (savedModel && dom.modelSelect) dom.modelSelect.value = savedModel;
     }
   } catch (e) {
     console.error("Failed to fetch system config", e);

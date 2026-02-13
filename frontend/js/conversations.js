@@ -138,6 +138,7 @@ export async function deleteConversation(id, e) {
 }
 
 export function renderConversations() {
+  if (!dom.historyContainer) return;
   dom.historyContainer.innerHTML = "";
   state.conversations.forEach((c) => {
     const item = document.createElement("div");

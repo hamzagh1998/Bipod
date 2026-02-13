@@ -6,46 +6,61 @@ export let state = {
   currentAttachments: [],
 };
 
-// --- DOM References ---
-export const dom = {
-  chatWindow: document.getElementById("chat-window"),
-  chatForm: document.getElementById("chat-form"),
-  userInput: document.getElementById("user-input"),
-  loadingIndicator: document.getElementById("loading-indicator"),
-  historyContainer: document.getElementById("history-container"),
-  newChatBtn: document.getElementById("new-chat-btn"),
-  chatTitle: document.getElementById("chat-title"),
-  sidebar: document.getElementById("sidebar"),
-  sidebarToggle: document.getElementById("sidebar-toggle"),
-  sidebarOverlay: document.getElementById("sidebar-overlay"),
-  welcomeHero: document.getElementById("welcome-hero"),
+// --- Safe DOM Access Helper ---
+const safeGet = (id) => document.getElementById(id);
 
-  // Brain Settings
-  brainSettingsBtn: document.getElementById("brain-settings-btn"),
-  brainSettingsPanel: document.getElementById("brain-settings-panel"),
-  modelSelect: document.getElementById("model-select"),
-  modeSelect: document.getElementById("mode-select"),
-  imagineModelSelect: document.getElementById("imagine-model-select"),
+export const dom = new Proxy(
+  {},
+  {
+    get: (target, prop) => {
+      // Basic elements that stay consistent across pages
+      const commonElements = {
+        sidebar: "sidebar",
+        sidebarToggle: "sidebar-toggle",
+        sidebarOverlay: "sidebar-overlay",
+        logoutBtn: "logout-btn",
+        currentUsernameSpan: "current-username",
+        lightbox: "lightbox",
+        lightboxImg: "lightbox-img",
+        lightboxDownload: "lightbox-download",
+        lightboxClose: "lightbox-close",
+        lightboxOverlay: "lightbox-overlay",
+      };
 
-  // File Upload
-  attachBtn: document.getElementById("attach-btn"),
-  fileUpload: document.getElementById("file-upload"),
-  attachmentPreviewContainer: document.getElementById(
-    "attachment-preview-container",
-  ),
+      if (commonElements[prop]) {
+        return document.getElementById(commonElements[prop]);
+      }
 
-  // Auth Overlay
-  authOverlay: document.getElementById("auth-overlay"),
-  loginForm: document.getElementById("login-form"),
-  signupForm: document.getElementById("signup-form"),
-  toSignup: document.getElementById("to-signup"),
-  toLogin: document.getElementById("to-login"),
-  logoutBtn: document.getElementById("logout-btn"),
-  currentUsernameSpan: document.getElementById("current-username"),
-  // Lightbox
-  lightbox: document.getElementById("lightbox"),
-  lightboxImg: document.getElementById("lightbox-img"),
-  lightboxDownload: document.getElementById("lightbox-download"),
-  lightboxClose: document.getElementById("lightbox-close"),
-  lightboxOverlay: document.getElementById("lightbox-overlay"),
-};
+      // Chat specific elements
+      const chatElements = {
+        chatWindow: "chat-window",
+        chatForm: "chat-form",
+        userInput: "user-input",
+        loadingIndicator: "loading-indicator",
+        historyContainer: "history-container",
+        newChatBtn: "new-chat-btn",
+        chatTitle: "chat-title",
+        welcomeHero: "welcome-hero",
+        brainSettingsBtn: "brain-settings-btn",
+        brainSettingsPanel: "brain-settings-panel",
+        modelSelect: "model-select",
+        modeSelect: "mode-select",
+        imagineModelSelect: "imagine-model-select",
+        attachBtn: "attach-btn",
+        fileUpload: "file-upload",
+        attachmentPreviewContainer: "attachment-preview-container",
+        authOverlay: "auth-overlay",
+        loginForm: "login-form",
+        signupForm: "signup-form",
+        toSignup: "to-signup",
+        toLogin: "to-login",
+      };
+
+      if (chatElements[prop]) {
+        return document.getElementById(chatElements[prop]);
+      }
+
+      return document.getElementById(prop);
+    },
+  },
+);

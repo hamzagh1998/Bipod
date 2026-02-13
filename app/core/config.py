@@ -35,6 +35,17 @@ def detect_gpu_vram() -> float:
     except:
         return 0.0
 
+def detect_gpu_name() -> str:
+    """Returns the name of the first GPU if it exists, else 'CPU'."""
+    try:
+        result = subprocess.run(
+            ["nvidia-smi", "--query-gpu=gpu_name", "--format=csv,noheader"],
+            check=True, capture_output=True, text=True
+        )
+        return result.stdout.strip()
+    except:
+        return "CPU Mode"
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -50,6 +61,7 @@ class Settings(BaseSettings):
     # These use default_factories to probe hardware at startup
     HARDWARE_TARGET: Literal["amd64", "arm64"] = Field(default_factory=detect_hardware_arch)
     USE_GPU: bool = Field(default_factory=detect_gpu_presence)
+    GPU_NAME: str = Field(default_factory=detect_gpu_name)
     GPU_VRAM: float = Field(default_factory=detect_gpu_vram) # Total VRAM in GB
     
     # --- Storage Paths ---

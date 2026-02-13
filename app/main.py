@@ -50,6 +50,14 @@ async def startup_event():
 async def root():
     return FileResponse("frontend/index.html")
 
+@app.get("/studio.html")
+async def studio_html():
+    return FileResponse("frontend/studio.html")
+
+@app.get("/studio")
+async def studio():
+    return FileResponse("frontend/studio.html")
+
 # Global Exception Handler
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
