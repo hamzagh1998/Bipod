@@ -30,8 +30,15 @@ class FileService:
                 search_dir = self.host_root
             
             # Use 'find' for high-performance searching
-            # -iname for case-insensitive matching
-            cmd = ["find", search_dir, "-maxdepth", "12", "-iname", f"*{pattern}*"]
+            # -iname for case-insensitive matching. Exclude system dirs and hidden files.
+            cmd = [
+                "find", search_dir, "-maxdepth", "12", 
+                "-not", "-path", "*/.*", 
+                "-not", "-path", f"{self.host_root}/proc*", 
+                "-not", "-path", f"{self.host_root}/sys*", 
+                "-not", "-path", f"{self.host_root}/dev*",
+                "-iname", f"*{pattern}*"
+            ]
             
             logger.info(f"Running search command: {' '.join(cmd)}")
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
@@ -100,21 +107,85 @@ class FileService:
             return None
 
     async def write_host_file(self, path: str, content: str) -> str | None:
-        """Writes content to a file on the host filesystem.
-        
-        Returns the host-visible path on success, or None on failure.
-        The system prompt ensures this is only called when the user explicitly
-        requests a file to be created or saved.
-        """
+        """Writes content to a file on the host filesystem."""
         try:
             full_path = self.get_host_path(path)
             os.makedirs(os.path.dirname(full_path), exist_ok=True)
             with open(full_path, 'w', encoding='utf-8') as f:
                 f.write(content)
             logger.info(f"File saved to container path: {full_path} (host path: {path})")
-            return path  # Return the clean host path
+            return path
         except Exception as e:
             logger.error(f"Failed to write host file {path}: {e}")
             return None
+
+    async def move_host_file(self, src: str, dest: str) -> bool:
+        """Moves or renames a file/directory on the host. Supports wildcards (glob)."""
+        try:
+            import glob
+            import shutil
+            
+            src_full = self.get_host_path(src)
+            dest_full = self.get_host_path(dest)
+            
+            # Find all matching source files
+            src_matches = glob.glob(src_full)
+            if not src_matches:
+                logger.warning(f"No files matched source pattern: {src_full}")
+                return False
+
+            # Ensure destination directory exists if moving multiple files
+            if len(src_matches) > 1 or os.path.isdir(dest_full):
+                os.makedirs(dest_full, exist_ok=True)
+            else:
+                os.makedirs(os.path.dirname(dest_full), exist_ok=True)
+
+            for match in src_matches:
+                shutil.move(match, dest_full)
+                logger.info(f"Moved {match} to {dest_full}")
+            
+            return True
+        except Exception as e:
+            logger.error(f"Failed to move {src} to {dest}: {e}")
+            return False
+
+    async def delete_host_file(self, path: str) -> bool:
+        """Deletes a file or directory on the host."""
+        try:
+            full_path = self.get_host_path(path)
+            if os.path.exists(full_path):
+                if os.path.isdir(full_path):
+                    import shutil
+                    shutil.rmtree(full_path)
+                else:
+                    os.remove(full_path)
+                logger.info(f"Deleted {path}")
+                return True
+            return False
+        except Exception as e:
+            logger.error(f"Failed to delete {path}: {e}")
+            return False
+
+    async def organize_host_directory(self, directory: str) -> int:
+        """Organizes files in a directory into subfolders by extension."""
+        try:
+            full_dir = self.get_host_path(directory)
+            if not os.path.isdir(full_dir):
+                return 0
+            
+            import shutil
+            count = 0
+            for item in os.listdir(full_dir):
+                item_path = os.path.join(full_dir, item)
+                if os.path.isfile(item_path):
+                    ext = item.split(".")[-1].lower() if "." in item else "no_extension"
+                    target_fold = os.path.join(full_dir, ext)
+                    os.makedirs(target_fold, exist_ok=True)
+                    shutil.move(item_path, os.path.join(target_fold, item))
+                    count += 1
+            return count
+        except Exception as e:
+            logger.error(f"Failed to organize {directory}: {e}")
+            return 0
 
 file_service = FileService()

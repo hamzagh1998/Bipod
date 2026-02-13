@@ -24,6 +24,17 @@ def detect_gpu_presence() -> bool:
     except (subprocess.CalledProcessError, FileNotFoundError):
         return False
 
+def detect_gpu_vram() -> float:
+    """Returns total VRAM in GB if GPU exists, else 0.0."""
+    try:
+        result = subprocess.run(
+            ["nvidia-smi", "--query-gpu=memory.total", "--format=csv,noheader,nounits"],
+            check=True, capture_output=True, text=True
+        )
+        return float(result.stdout.strip()) / 1024.0
+    except:
+        return 0.0
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -39,6 +50,7 @@ class Settings(BaseSettings):
     # These use default_factories to probe hardware at startup
     HARDWARE_TARGET: Literal["amd64", "arm64"] = Field(default_factory=detect_hardware_arch)
     USE_GPU: bool = Field(default_factory=detect_gpu_presence)
+    GPU_VRAM: float = Field(default_factory=detect_gpu_vram) # Total VRAM in GB
     
     # --- Storage Paths ---
     # Use /app/data if inside container, else local ./data
@@ -100,9 +112,9 @@ class Settings(BaseSettings):
         host = "imagine"
         try:
             socket.gethostbyname(host)
-            return f"http://{host}:8001"
+            return f"http://{host}:3333"
         except socket.gaierror:
-            return "http://localhost:8001"
+            return "http://localhost:3333"
 
     
     # Brain tiers
@@ -111,6 +123,11 @@ class Settings(BaseSettings):
     LIGHT_MODEL: str = "llama3.2:1b"   # For Pi 5 / ARM64
     VISION_MODEL: str = "moondream"    # Specialized for eyes
     EMBEDDING_MODEL: str = "nomic-embed-text" # Small, local embeddings
+
+    # Imagine tiers
+    IMAGINE_SDXL_MODEL: str = "stable-diffusion-xl" # High Quality (SDXL)
+    IMAGINE_SD_MODEL: str = "stable-diffusion"     # Medium Quality (SD 1.5)
+    IMAGINE_TINY_MODEL: str = "dalle-mini"       # Low Quality / CPU
 
     @computed_field
     @property
@@ -121,6 +138,16 @@ class Settings(BaseSettings):
         if self.USE_GPU:
             return self.HEAVY_MODEL
         return self.MEDIUM_MODEL
+
+    @computed_field
+    @property
+    def ACTIVE_IMAGINE_MODEL(self) -> str:
+        """Dynamically picks the best imagine model."""
+        if not self.USE_GPU:
+            return self.IMAGINE_TINY_MODEL
+        if self.GPU_VRAM >= 5.5: # 6GB cards usually show ~5.8GB
+            return self.IMAGINE_SDXL_MODEL
+        return self.IMAGINE_SD_MODEL
 
     # --- Auth Settings ---
     SECRET_KEY: str = "bipod-ultra-secret-key-keep-it-local" # Recommend changing this in .env

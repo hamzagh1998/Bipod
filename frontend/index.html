@@ -207,13 +207,19 @@
                     <div class="setting-group">
                       <label for="imagine-model-select">Imagine Model</label>
                       <select id="imagine-model-select">
+                        <option value="stable-diffusion-xl">
+                          Ultra Quality (SDXL)
+                        </option>
                         <option value="stable-diffusion">
-                          Stable Diffusion (Standard)
+                          Standard (SD 1.5)
                         </option>
                         <option value="dalle-mini">
                           TinySD (CPU Optimized)
                         </option>
                       </select>
+                    </div>
+                    <div id="hardware-info-badge" class="hardware-info-badge">
+                      <!-- Will be filled by JS: "⚡ RTX 4050 6GB detected" -->
                     </div>
                   </div>
                 </div>
@@ -254,9 +260,18 @@
     <div id="lightbox" class="lightbox">
       <div class="lightbox-overlay" id="lightbox-overlay"></div>
       <div class="lightbox-content">
-        <button id="lightbox-close" class="lightbox-close">
-          <span class="material-symbols-rounded">close</span>
-        </button>
+        <div class="lightbox-actions">
+          <button
+            id="lightbox-download"
+            class="lightbox-download"
+            title="Download Image"
+          >
+            <span class="material-symbols-rounded">download</span>
+          </button>
+          <button id="lightbox-close" class="lightbox-close">
+            <span class="material-symbols-rounded">close</span>
+          </button>
+        </div>
         <img id="lightbox-img" src="" alt="Preview" />
       </div>
     </div>

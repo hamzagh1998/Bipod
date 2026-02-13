@@ -22,7 +22,7 @@ services:
     container_name: bipod_imagine
     restart: unless-stopped
     ports:
-      - "8001:8001"
+      - "3333:3333"
     environment:
       - HF_HOME=/app/models
       - OFFLINE_MODE=${OFFLINE_MODE:-true}
@@ -47,11 +47,11 @@ services:
       - ollama
       - imagine
     ports:
-      - "8000:8000"
+      - "4444:4444"
     environment:
       - OLLAMA_BASE_URL=http://ollama:11434
       - ENABLE_IMAGINE=true
-      - IMAGINE_API_URL=http://imagine:8001
+      - IMAGINE_API_URL=http://imagine:3333
       - PYTHON_JIT=${PYTHON_JIT:-on}
     deploy:
       resources:

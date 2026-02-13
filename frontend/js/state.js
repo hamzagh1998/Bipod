@@ -45,6 +45,7 @@ export const dom = {
   // Lightbox
   lightbox: document.getElementById("lightbox"),
   lightboxImg: document.getElementById("lightbox-img"),
+  lightboxDownload: document.getElementById("lightbox-download"),
   lightboxClose: document.getElementById("lightbox-close"),
   lightboxOverlay: document.getElementById("lightbox-overlay"),
 };

@@ -7,4 +7,6 @@ transformers
 scipy
 ftfy
 safetensors
-torch --index-url https://download.pytorch.org/whl/cu118
+xformers
+bitsandbytes
+torch --index-url https://download.pytorch.org/whl/cu121

@@ -21,11 +21,41 @@ async def health_check():
 @router.get("/system/config")
 async def get_system_config():
     """Returns hardware capabilities and available models."""
+    import httpx
+    try:
+        # Proxy detailed hardware info from Imagine service
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            # Parallel fetch for speed
+            r_sys, r_models = await asyncio.gather(
+                client.get(f"{settings.IMAGINE_API_URL}/system"),
+                client.get(f"{settings.IMAGINE_API_URL}/models")
+            )
+            
+            imagine_system = r_sys.json() if r_sys.status_code == 200 else {}
+            imagine_models = r_models.json().get("models", []) if r_models.status_code == 200 else []
+            vram_tier = imagine_system.get("vram_tier")
+            total_vram = imagine_system.get("vram", {}).get("total_gb", 0)
+
+    except Exception:
+        # Fallback if Imagine service is down
+        imagine_system = {}
+        imagine_models = []
+        vram_tier = None
+        total_vram = settings.GPU_VRAM
+
     return {
         "hardware": settings.HARDWARE_TARGET,
         "use_gpu": settings.USE_GPU,
-        "imagine_models": ["stable-diffusion", "dalle-mini"],
-        "default_imagine_model": "stable-diffusion" if settings.USE_GPU else "dalle-mini"
+        "gpu_vram": round(total_vram, 2),
+        "vram_tier": vram_tier,
+        "active_brain_model": settings.ACTIVE_MODEL,
+        "active_imagine_model": settings.ACTIVE_IMAGINE_MODEL,
+        "available_imagine_models": imagine_models if imagine_models else [
+             # Fallback list if service is unreachable
+            {"id": "stable-diffusion-xl", "name": "Ultra Quality (SDXL Lightning)", "req": "6GB+ VRAM"},
+            {"id": "stable-diffusion", "name": "Standard Quality", "req": "4GB+ VRAM"},
+            {"id": "dalle-mini", "name": "Low Quality / CPU", "req": "None (CPU)"}
+        ]
     }
 
 # --- Auth Endpoints ---

@@ -16,6 +16,8 @@ class VectorService:
         self.index_path = os.path.join(settings.VECTOR_DIR, "bipod.index")
         self.metadata_path = os.path.join(settings.VECTOR_DIR, "metadata.json")
         self.dim = 768 # Expected dimension for nomic-embed-text/small models
+        self.max_chunk_chars = 6000 # ~1500 tokens, safe limit for context windows
+        self.chunk_overlap = 500
         
         # Load or create index
         if os.path.exists(self.index_path):
@@ -35,12 +37,28 @@ class VectorService:
         self.metadata = []
         logger.info("Created new empty FAISS index")
 
+    def _chunk_text(self, text: str) -> List[str]:
+        """Splits long text into overlapping chunks for better semantic coverage."""
+        if len(text) <= self.max_chunk_chars:
+            return [text]
+        
+        chunks = []
+        start = 0
+        while start < len(text):
+            end = start + self.max_chunk_chars
+            chunk = text[start:end]
+            chunks.append(chunk)
+            start += (self.max_chunk_chars - self.chunk_overlap)
+        return chunks
+
     async def _get_embedding(self, text: str) -> Optional[List[float]]:
         try:
+            # Prevent context overflow: truncate query/text if it's still way too large
+            safe_text = text[:12000] # Hard cap as a last resort
             async with httpx.AsyncClient(timeout=60.0) as client:
                 response = await client.post(
                     f"{settings.OLLAMA_BASE_URL}/api/embeddings",
-                    json={"model": settings.EMBEDDING_MODEL, "prompt": text}
+                    json={"model": settings.EMBEDDING_MODEL, "prompt": safe_text}
                 )
                 if response.status_code == 200:
                     return response.json()["embedding"]
@@ -49,29 +67,35 @@ class VectorService:
         return None
 
     async def add_memory(self, text: str, user_id: int, message_id: int, conversation_id: str):
-        """Adds a new text snippet to the vector database."""
-        if len(text.strip()) < 10:
+        """Adds a text snippet to the vector database, chunking if necessary."""
+        if not text or len(text.strip()) < 10:
             return
 
-        embedding = await self._get_embedding(text)
-        if embedding:
-            # Update dimension if first run mismatch
-            if len(embedding) != self.dim:
-                self.dim = len(embedding)
-                self._create_empty_index()
-            
-            vec = np.array([embedding]).astype('float32')
-            self.index.add(vec)
-            
-            self.metadata.append({
-                "user_id": user_id,
-                "conversation_id": conversation_id,
-                "text": text,
-                "message_id": message_id,
-                "embedding": embedding # Cache for fast rebuilds
-            })
-            
-            # Save state
+        chunks = self._chunk_text(text)
+        logger.info(f"Indexing memory (splits: {len(chunks)})")
+
+        for i, chunk in enumerate(chunks):
+            embedding = await self._get_embedding(chunk)
+            if embedding:
+                # Update dimension if first run mismatch
+                if len(embedding) != self.dim:
+                    self.dim = len(embedding)
+                    self._create_empty_index()
+                
+                vec = np.array([embedding]).astype('float32')
+                self.index.add(vec)
+                
+                self.metadata.append({
+                    "user_id": user_id,
+                    "conversation_id": conversation_id,
+                    "text": chunk,
+                    "message_id": message_id,
+                    "chunk_index": i,
+                    "embedding": embedding # Cache for fast rebuilds
+                })
+        
+        # Save state after all chunks are added
+        if chunks:
             faiss.write_index(self.index, self.index_path)
             with open(self.metadata_path, 'w') as f:
                 json.dump(self.metadata, f)

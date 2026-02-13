@@ -1,5 +1,4 @@
-# Multi-arch support is inherent in python:3.14-slim (amd64/arm64)
-FROM python:3.14-slim
+FROM python:3.13-slim
 
 # Weightless Intelligence: Environment configuration
 ENV PYTHONDONTWRITEBYTECODE=1
@@ -33,7 +32,7 @@ COPY ./frontend ./frontend
 # Metadata and Data volumes
 VOLUME ["/app/data"]
 
-EXPOSE 8000
+EXPOSE 4444
 
 # Start with JIT enabled
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "4444", "--reload"]

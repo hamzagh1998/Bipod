@@ -1,6 +1,6 @@
 import { state, dom } from "./state.js";
 import { createNewConversation } from "./conversations.js";
-import { sendMessage } from "./chat.js";
+import { sendMessage, downloadImage } from "./chat.js";
 import { renderAttachmentPreviews } from "./attachments.js";
 import { handleLogin, handleSignup, handleLogout } from "./auth.js";
 
@@ -136,6 +136,12 @@ export function setupEventListeners() {
   });
   dom.lightboxOverlay.addEventListener("click", () => {
     dom.lightbox.classList.remove("active");
+  });
+
+  dom.lightboxDownload.addEventListener("click", () => {
+    const url = dom.lightboxImg.src;
+    const filename = url.split("/").pop();
+    downloadImage(url, filename);
   });
 
   // Auth Forms

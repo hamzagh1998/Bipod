@@ -1,21 +1,33 @@
 import torch
 import logging
 import os
-from diffusers import StableDiffusionPipeline
+import sys
+from diffusers import StableDiffusionPipeline, StableDiffusionXLPipeline
 from huggingface_hub import snapshot_download
 
-# Configure Logging
-logging.basicConfig(level=logging.INFO)
+# Configure Logging to both file and stdout
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler("/app/preload.log"),
+        logging.StreamHandler(sys.stdout)
+    ]
+)
 logger = logging.getLogger("bipod.imagine.preload")
 
 # Ensure environment is consistent
 os.environ["HF_HUB_DISABLE_SYMLINKS"] = "1"
-# HF_HOME is usually set in Dockerfile/compose, but we ensure it's used
 HF_HOME = os.environ.get("HF_HOME", "/app/models")
 
 MODELS = [
-    "runwayml/stable-diffusion-v1-5",
-    "segmind/tiny-sd"
+    # Photorealism
+    {"id": "SG161222/Realistic_Vision_V6.0_B1_noVAE", "type": "sd"},
+    {"id": "stabilityai/sd-vae-ft-mse", "type": "vae"},
+    
+    # THE BIG ONE (SDXL Lightning)
+    {"id": "ByteDance/SDXL-Lightning-4step-base", "type": "sdxl"},
+    {"id": "madebyollin/sdxl-vae-fp16-fix", "type": "vae"}
 ]
 
 def preload():
@@ -23,48 +35,37 @@ def preload():
     logger.info(f"Starting model preloading on {device}...")
     logger.info(f"Using HF_HOME: {HF_HOME}")
     
-    for repo_id in MODELS:
+    for model in MODELS:
+        repo_id = model["id"]
+        m_type = model["type"]
+        
         try:
-            logger.info(f"Preloading model: {repo_id}...")
+            logger.info(f"Processing {m_type}: {repo_id}...")
             
-            # Step 1: Force download ONLY necessary files using snapshot_download
-            # We ignore massive standalone checkpoints (.ckpt, .msgpack, etc) 
-            # and only keep the diffusers-format subfolders.
-            logger.info(f"Downloading optimized snapshot for {repo_id}...")
+            if m_type == "vae":
+                logger.info(f"Downloading VAE: {repo_id}...")
+                snapshot_download(repo_id=repo_id, cache_dir=HF_HOME, local_files_only=False)
+                logger.info(f"Successfully downloaded VAE: {repo_id}")
+                continue
+
+            # Step 1: Download necessary files
+            logger.info(f"Downloading snapshot for {repo_id}...")
             snapshot_download(
                 repo_id=repo_id,
                 cache_dir=HF_HOME,
                 local_files_only=False,
-                ignore_patterns=[
-                    "*.ckpt", 
-                    "*.safetensors", 
-                    "*.bin",
-                    "*.pt",
-                    "*.msgpack"
-                ],
-                # We explicitly allow the subfolder files we actually need
-                allow_patterns=[
-                    "*.json",
-                    "*.txt",
-                    "unet/*",
-                    "vae/*",
-                    "tokenizer/*",
-                    "text_encoder/*",
-                    "scheduler/*",
-                    "feature_extractor/*",
-                    "safety_checker/*"
-                ]
+                ignore_patterns=["*.ckpt", "*.msgpack"]
             )
 
-            # Step 2: Verify by loading onto device
-            # This will trigger the actual download of the specific tensors we need (.bin or .safetensors)
-            # inside those subfolders, but only for the specific variant/dtype we choose.
-            logger.info(f"Verifying {repo_id} by loading into memory...")
+            # Step 2: Verify and trigger tensor download
             torch_dtype = torch.float16 if device == "cuda" else torch.float32
             variant = "fp16" if device == "cuda" else None
             
+            pipe_cls = StableDiffusionXLPipeline if m_type == "sdxl" else StableDiffusionPipeline
+            
+            logger.info(f"Verifying {repo_id} with {pipe_cls.__name__}...")
             try:
-                StableDiffusionPipeline.from_pretrained(
+                pipe_cls.from_pretrained(
                     repo_id,
                     torch_dtype=torch_dtype,
                     variant=variant,
@@ -72,25 +73,26 @@ def preload():
                     local_files_only=False,
                     low_cpu_mem_usage=True
                 )
-            except Exception as variant_error:
-                if variant == "fp16":
-                    logger.warning(f"Failed to load fp16 variant for {repo_id}, falling back to default weights: {variant_error}")
-                    StableDiffusionPipeline.from_pretrained(
-                        repo_id,
-                        torch_dtype=torch.float32, # Fallback to fp32
-                        variant=None,
-                        cache_dir=HF_HOME,
-                        local_files_only=False,
-                        low_cpu_mem_usage=True
-                    )
-                else:
-                    raise variant_error
+            except Exception as e:
+                logger.warning(f"Failed to load optimized variant ({variant}), trying default: {e}")
+                pipe_cls.from_pretrained(
+                    repo_id,
+                    torch_dtype=torch_dtype, # Keep dtype if possible
+                    variant=None,
+                    cache_dir=HF_HOME,
+                    local_files_only=False,
+                    low_cpu_mem_usage=True
+                )
 
-            logger.info(f"Successfully preloaded and verified {repo_id}")
+            logger.info(f"Successfully verified {repo_id}")
             
         except Exception as e:
-            logger.error(f"Failed to preload {repo_id}: {e}")
+            logger.error(f"CRITICAL failure for {repo_id}: {e}", exc_info=True)
 
 if __name__ == "__main__":
-    preload()
-    logger.info("Preloading complete! Bipod is ready to imagine.")
+    try:
+        preload()
+        logger.info("Preloading complete! Bipod is ready to imagine.")
+    except Exception as top_e:
+        logger.error(f"Global preload script failure: {top_e}", exc_info=True)
+        sys.exit(1)

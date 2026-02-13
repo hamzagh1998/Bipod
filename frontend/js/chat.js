@@ -15,9 +15,10 @@ export function appendMessage(role, text, shouldScroll = true) {
   contentDiv.className = "message-content";
 
   if (role === "ai") {
-    // Check for generated image success message and append image markdown
-    // Path inside docker is /app/data/generated/filename.jpg
-    const imgMatch = text.match(/Saved to: .*?\/generated\/(.*?\.jpg)/);
+    // More robust regex for image path detection (case-insensitive, handles optional colons/backticks)
+    const imgMatch = text.match(
+      /[sS]aved to:?\s+[`']?.*?\/generated\/([a-zA-Z0-9_-]+\.jpg)[`']?/i,
+    );
     if (imgMatch) {
       const filename = imgMatch[1];
       // Append markdown image if not already present
@@ -35,20 +36,37 @@ export function appendMessage(role, text, shouldScroll = true) {
 
     // Add Lightbox support to all images in the AI response
     contentDiv.querySelectorAll("img").forEach((img) => {
-      img.addEventListener("click", () => {
+      img.style.cursor = "zoom-in";
+      img.onclick = () => {
         dom.lightboxImg.src = img.src;
         dom.lightbox.classList.add("active");
-      });
+      };
     });
 
     const actionsDiv = document.createElement("div");
     actionsDiv.className = "msg-actions";
+
     const copyBtn = document.createElement("button");
     copyBtn.className = "msg-action-btn";
     copyBtn.innerHTML =
-      '<span class="material-symbols-rounded">content_copy</span> Copy response';
+      '<span class="material-symbols-rounded">content_copy</span> Copy';
     copyBtn.onclick = () => copyToClipboard(text);
     actionsDiv.appendChild(copyBtn);
+
+    const downloadBtn = document.createElement("button");
+    downloadBtn.className = "msg-action-btn";
+    downloadBtn.innerHTML =
+      '<span class="material-symbols-rounded">download</span> Download';
+    downloadBtn.onclick = () => {
+      const img = contentDiv.querySelector("img");
+      if (img) {
+        const url = img.src;
+        const filename = url.split("/").pop();
+        downloadImage(url, filename);
+      }
+    };
+    actionsDiv.appendChild(downloadBtn);
+
     contentDiv.appendChild(actionsDiv);
   } else if (role === "system") {
     contentDiv.innerText = text;
@@ -180,4 +198,13 @@ export async function sendMessage(text) {
       dom.chatWindow.scrollTop = dom.chatWindow.scrollHeight;
     }
   }
+}
+
+export function downloadImage(url, filename) {
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename || "bipod_image.jpg";
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
 }
