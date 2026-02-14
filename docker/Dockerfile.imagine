@@ -14,7 +14,7 @@ RUN apt-get update && apt-get install -y \
 
 # 1. Install heavy ML base first (large downloads)
 RUN pip install --no-cache-dir --timeout 1000 --retries 10 \
-    torch torchvision --index-url https://download.pytorch.org/whl/cu121
+    torch==2.5.1 torchvision==0.20.1 --index-url https://download.pytorch.org/whl/cu121
 
 # 2. Install xformers and bitsandbytes (often problematic)
 RUN pip install --no-cache-dir --timeout 1000 --retries 10 \
