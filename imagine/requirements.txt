@@ -7,6 +7,7 @@ transformers==4.44.2
 scipy
 ftfy
 safetensors
+huggingface_hub
 timm
 sentencepiece
 protobuf

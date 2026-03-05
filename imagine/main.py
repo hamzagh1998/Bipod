@@ -12,6 +12,8 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field, validator
 from io import BytesIO
 import base64
+from huggingface_hub import hf_hub_download
+from safetensors.torch import load_file
 from diffusers import (
     AutoPipelineForText2Image,
     AutoPipelineForImage2Image,
@@ -90,6 +92,9 @@ MODEL_REPO_MAP = {
     "sdxl-lightning":   "ByteDance/SDXL-Lightning",
     "flux-schnell":     "black-forest-labs/FLUX.1-schnell",
 }
+SDXL_BASE_REPO = "stabilityai/stable-diffusion-xl-base-1.0"
+SDXL_LIGHTNING_REPO = "ByteDance/SDXL-Lightning"
+SDXL_LIGHTNING_UNET_FILE = "sdxl_lightning_4step_unet.safetensors"
 
 FLUX_MIN_VRAM_GB = 5.5
 
@@ -231,17 +236,21 @@ def _apply_optimizations(pipe, vram_tier: Optional[str], label: str = ""):
         logger.info(f"{pfx}✓ Model CPU offload enabled")
 
 
-def load_sdxl_pipeline(repo_id: str, device: str, vram_tier: Optional[str]):
+def load_sdxl_pipeline(repo_id: str, device: str, vram_tier: Optional[str], model_type: Optional[str] = None):
     global txt2img_pipe, img2img_pipe
+
+    is_lightning = model_type == "sdxl-lightning"
+    base_repo_id = SDXL_BASE_REPO if is_lightning else repo_id
+    use_safetensors = model_type != "dalle-mini"
 
     common = {
         "cache_dir":        HF_HOME,
         "local_files_only": OFFLINE_MODE,
-        "use_safetensors":  True,
+        "use_safetensors":  use_safetensors,
         "low_cpu_mem_usage": True,
     }
 
-    is_xl = "lightning" in repo_id.lower()
+    is_xl = is_lightning
 
     if device == "cuda":
         vae_id = (
@@ -254,22 +263,38 @@ def load_sdxl_pipeline(repo_id: str, device: str, vram_tier: Optional[str]):
             vae_id, torch_dtype=torch.float16, **common
         )
 
-        use_fp16_variant = is_xl and "tiny" not in repo_id.lower()
+        use_fp16_variant = is_xl and "tiny" not in base_repo_id.lower()
         logger.info("Loading Text2Img pipeline...")
         txt2img_pipe = AutoPipelineForText2Image.from_pretrained(
-            repo_id,
+            base_repo_id,
             vae=vae,
             torch_dtype=torch.float16,
             variant="fp16" if use_fp16_variant else None,
             **common,
         )
 
+        if is_lightning:
+            logger.info("Applying SDXL-Lightning 4-step UNet weights...")
+            lightning_unet_path = hf_hub_download(
+                repo_id=SDXL_LIGHTNING_REPO,
+                filename=SDXL_LIGHTNING_UNET_FILE,
+                cache_dir=HF_HOME,
+                local_files_only=OFFLINE_MODE,
+            )
+            state_dict = load_file(lightning_unet_path, device="cpu")
+            missing, unexpected = txt2img_pipe.unet.load_state_dict(state_dict, strict=False)
+            if unexpected:
+                raise RuntimeError(f"Unexpected SDXL-Lightning UNet keys: {unexpected[:5]}")
+            if missing:
+                logger.warning(f"Missing SDXL-Lightning UNet keys: {len(missing)}")
+            logger.info("✓ SDXL-Lightning UNet loaded")
+
         # Scheduler — before from_pipe() so img2img inherits it
-        if "lightning" in repo_id.lower():
+        if is_lightning:
             txt2img_pipe.scheduler = EulerDiscreteScheduler.from_config(
                 txt2img_pipe.scheduler.config, timestep_spacing="trailing"
             )
-        elif "tiny" in repo_id.lower():
+        elif "tiny" in base_repo_id.lower():
             txt2img_pipe.scheduler = DPMSolverMultistepScheduler.from_config(
                 txt2img_pipe.scheduler.config, use_karras_sigmas=True
             )
@@ -279,12 +304,29 @@ def load_sdxl_pipeline(repo_id: str, device: str, vram_tier: Optional[str]):
         img2img_pipe = AutoPipelineForImage2Image.from_pipe(txt2img_pipe)
 
     else:
-        txt2img_pipe = AutoPipelineForText2Image.from_pretrained(repo_id, **common)
-        if "lightning" in repo_id.lower():
+        txt2img_pipe = AutoPipelineForText2Image.from_pretrained(base_repo_id, **common)
+
+        if is_lightning:
+            logger.info("Applying SDXL-Lightning 4-step UNet weights...")
+            lightning_unet_path = hf_hub_download(
+                repo_id=SDXL_LIGHTNING_REPO,
+                filename=SDXL_LIGHTNING_UNET_FILE,
+                cache_dir=HF_HOME,
+                local_files_only=OFFLINE_MODE,
+            )
+            state_dict = load_file(lightning_unet_path, device="cpu")
+            missing, unexpected = txt2img_pipe.unet.load_state_dict(state_dict, strict=False)
+            if unexpected:
+                raise RuntimeError(f"Unexpected SDXL-Lightning UNet keys: {unexpected[:5]}")
+            if missing:
+                logger.warning(f"Missing SDXL-Lightning UNet keys: {len(missing)}")
+            logger.info("✓ SDXL-Lightning UNet loaded")
+
+        if is_lightning:
             txt2img_pipe.scheduler = EulerDiscreteScheduler.from_config(
                 txt2img_pipe.scheduler.config, timestep_spacing="trailing"
             )
-        elif "tiny" in repo_id.lower():
+        elif "tiny" in base_repo_id.lower():
             txt2img_pipe.scheduler = DPMSolverMultistepScheduler.from_config(
                 txt2img_pipe.scheduler.config, use_karras_sigmas=True
             )
@@ -435,7 +477,7 @@ def load_pipelines(model_type: str):
         if model_type == "flux-schnell":
             load_flux_pipeline(repo_id, device, vram_tier)
         else:
-            load_sdxl_pipeline(repo_id, device, vram_tier)
+            load_sdxl_pipeline(repo_id, device, vram_tier, model_type=model_type)
 
         current_model_id = repo_id
         aggressive_cleanup()
@@ -706,7 +748,7 @@ def list_models():
         {
             "id":       "sdxl-lightning",
             "name":     "SDXL Lightning (4-step)",
-            "repo":     "ByteDance/SDXL-Lightning",
+            "repo":     "stabilityai/stable-diffusion-xl-base-1.0 + ByteDance/SDXL-Lightning",
             "speed":    "fast",
             "use_case": "General generation, fast drafts",
             "supports_img2img":      True,

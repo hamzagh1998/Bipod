@@ -2,7 +2,8 @@ import torch
 import logging
 import os
 import sys
-from huggingface_hub import snapshot_download, try_to_load_from_cache
+import glob
+from huggingface_hub import snapshot_download
 
 logging.basicConfig(
     level=logging.INFO,
@@ -18,9 +19,10 @@ os.environ["HF_HUB_DISABLE_SYMLINKS"] = "1"
 HF_HOME = os.environ.get("HF_HOME", "/app/models")
 
 MODELS = [
-    {"id": "SG161222/Realistic_Vision_V6.0_B1_noVAE",  "type": "sd"},
+    {"id": "SG161222/Realistic_Vision_V6.0_B1_noVAE",   "type": "sd"},
     {"id": "stabilityai/sd-vae-ft-mse",                 "type": "vae"},
-    {"id": "ByteDance/SDXL-Lightning",                  "type": "sdxl"},
+    {"id": "stabilityai/stable-diffusion-xl-base-1.0",  "type": "sdxl-base"},
+    {"id": "ByteDance/SDXL-Lightning",                  "type": "sdxl-lightning-unet"},
     {"id": "madebyollin/sdxl-vae-fp16-fix",             "type": "vae"},
     {"id": "segmind/tiny-sd",                           "type": "sd"},
     {"id": "caidas/swin2SR-classical-sr-x2-64",         "type": "transformer"},
@@ -46,9 +48,13 @@ BASE_PATTERNS = [
 
 # SD 1.5: safetensors only (no root blobs, no inpainting, no .bin files)
 SD_PATTERNS = BASE_PATTERNS + [
+    "*.safetensors",
     "unet/*.safetensors",
     "text_encoder/*.safetensors",
     "vae/*.safetensors",
+    "unet/*.bin",
+    "text_encoder/*.bin",
+    "vae/*.bin",
 ]
 
 # SDXL: safetensors only (no root blobs)
@@ -57,6 +63,11 @@ SDXL_PATTERNS = BASE_PATTERNS + [
     "text_encoder/*.safetensors",
     "text_encoder_2/*.safetensors",
     "vae/*.safetensors",
+]
+
+# SDXL Lightning repo is an UNet checkpoint repo; runtime expects the 4-step UNet file.
+SDXL_LIGHTNING_PATTERNS = [
+    "sdxl_lightning_4step_unet.safetensors",
 ]
 
 # Flux: bf16 safetensors (no root blobs)
@@ -79,12 +90,74 @@ def get_total_vram_gb():
     return torch.cuda.get_device_properties(0).total_memory / (1024 ** 3)
 
 
-def is_cached(repo_id):
-    result = try_to_load_from_cache(repo_id, "config.json", cache_dir=HF_HOME)
-    return result is not None
+REQUIRED_PATTERNS = {
+    "sd": [
+        "model_index.json",
+        "*.safetensors|unet/*.safetensors|unet/*.bin",
+    ],
+    "sdxl-base": [
+        "model_index.json",
+        "unet/*.safetensors",
+        "text_encoder/*.safetensors",
+        "text_encoder_2/*.safetensors",
+    ],
+    "sdxl-lightning-unet": [
+        "sdxl_lightning_4step_unet.safetensors",
+    ],
+    "flux": [
+        "model_index.json",
+        "text_encoder/*.safetensors",
+        "text_encoder_2/*.safetensors",
+        "transformer/*.safetensors",
+        "vae/*.safetensors",
+    ],
+    "vae": [
+        "**/*.safetensors",
+    ],
+    "transformer": [
+        "config.json",
+        "preprocessor_config.json",
+        "model.safetensors|pytorch_model.bin",
+    ],
+}
 
 
-def download_snapshot(repo_id, allow_patterns=None):
+def _has_any_match(snapshot_path, pattern_expr: str) -> bool:
+    alternatives = [p.strip() for p in pattern_expr.split("|")]
+    for pat in alternatives:
+        if glob.glob(os.path.join(snapshot_path, pat), recursive=True):
+            return True
+    return False
+
+
+def _get_snapshot_path_if_cached(repo_id: str):
+    try:
+        return snapshot_download(
+            repo_id=repo_id,
+            cache_dir=HF_HOME,
+            local_files_only=True,
+        )
+    except Exception:
+        return None
+
+
+def is_cached_and_valid(model_cfg: dict) -> bool:
+    repo_id = model_cfg["id"]
+    m_type = model_cfg["type"]
+    required = REQUIRED_PATTERNS.get(m_type, [])
+
+    snapshot_path = _get_snapshot_path_if_cached(repo_id)
+    if not snapshot_path:
+        return False
+
+    for pattern in required:
+        if not _has_any_match(snapshot_path, pattern):
+            logger.warning(f"Cache check failed for {repo_id}: missing '{pattern}'")
+            return False
+    return True
+
+
+def download_snapshot(repo_id, allow_patterns=None, ignore_patterns=None):
     """
     Download a HuggingFace repo snapshot.
     allow_patterns limits which files are fetched — critical for large repos
@@ -93,7 +166,7 @@ def download_snapshot(repo_id, allow_patterns=None):
     snapshot_download(
         repo_id=repo_id,
         cache_dir=HF_HOME,
-        ignore_patterns=["*.ckpt", "*.msgpack", "*.bin"],  # always skip legacy formats
+        ignore_patterns=ignore_patterns or ["*.ckpt", "*.msgpack"],
         allow_patterns=allow_patterns,
     )
 
@@ -103,23 +176,45 @@ def download_snapshot(repo_id, allow_patterns=None):
 # ---------------------------------------------------------------------------
 
 def preload_sd(repo_id):
-    logger.info(f"[sd] Downloading (safetensors only): {repo_id}")
-    download_snapshot(repo_id, allow_patterns=SD_PATTERNS)
+    logger.info(f"[sd] Downloading (optimized SD weights): {repo_id}")
+    download_snapshot(
+        repo_id,
+        allow_patterns=SD_PATTERNS,
+        ignore_patterns=["*.ckpt", "*.msgpack"],
+    )
     logger.info(f"[sd] ✓ Downloaded: {repo_id}")
 
 
 def preload_sdxl(repo_id):
     logger.info(f"[sdxl] Downloading (safetensors only): {repo_id}")
-    download_snapshot(repo_id, allow_patterns=SDXL_PATTERNS)
+    download_snapshot(
+        repo_id,
+        allow_patterns=SDXL_PATTERNS,
+        ignore_patterns=["*.ckpt", "*.msgpack", "*.bin"],
+    )
     logger.info(f"[sdxl] ✓ Downloaded: {repo_id}")
 
 
 def preload_flux(repo_id):
     logger.info(f"[flux] Downloading Flux.1-schnell (~34GB bf16): {repo_id}")
     logger.info("[flux] Downloading transformer + T5-XXL + VAE + CLIP only...")
-    download_snapshot(repo_id, allow_patterns=FLUX_PATTERNS)
+    download_snapshot(
+        repo_id,
+        allow_patterns=FLUX_PATTERNS,
+        ignore_patterns=["*.ckpt", "*.msgpack", "*.bin"],
+    )
     logger.info(f"[flux] ✓ Downloaded: {repo_id}")
-    logger.info("[flux] Note: Verification skipped (requires >5.5GB VRAM). Weights cached for runtime.")
+    logger.info("[flux] ✓ Downloaded and ready for strict cache validation.")
+
+
+def preload_sdxl_lightning_unet(repo_id):
+    logger.info(f"[sdxl-lightning] Downloading UNet checkpoint: {repo_id}")
+    download_snapshot(
+        repo_id,
+        allow_patterns=SDXL_LIGHTNING_PATTERNS,
+        ignore_patterns=["*.ckpt", "*.msgpack", "*.bin"],
+    )
+    logger.info(f"[sdxl-lightning] ✓ Downloaded: {repo_id}")
 
 
 def preload_vae(repo_id):
@@ -139,11 +234,12 @@ def preload_transformer(repo_id):
 # ---------------------------------------------------------------------------
 
 PRELOAD_HANDLERS = {
-    "sd":          preload_sd,
-    "sdxl":        preload_sdxl,
-    "flux":        preload_flux,
-    "vae":         preload_vae,
-    "transformer": preload_transformer,
+    "sd":                    preload_sd,
+    "sdxl-base":             preload_sdxl,
+    "sdxl-lightning-unet":   preload_sdxl_lightning_unet,
+    "flux":                  preload_flux,
+    "vae":                   preload_vae,
+    "transformer":           preload_transformer,
 }
 
 
@@ -163,16 +259,17 @@ def preload():
     logger.info("Model download sizes (with safetensors filtering):")
     logger.info("  Realistic Vision V6     ~2.0 GB  (safetensors only)")
     logger.info("  sd-vae-ft-mse           ~0.3 GB")
-    logger.info("  SDXL-Lightning          ~6.5 GB  (safetensors only)")
+    logger.info("  SDXL Base 1.0           ~6.5 GB  (safetensors only)")
+    logger.info("  SDXL Lightning UNet     ~0.2 GB  (4-step checkpoint)")
     logger.info("  sdxl-vae-fp16-fix       ~0.2 GB")
     logger.info("  Tiny-SD                 ~0.4 GB")
     logger.info("  Swin2SR upscaler        ~0.1 GB")
     logger.info("  Flux.1-schnell          ~34  GB  (bf16 safetensors only)")
     logger.info("  ─────────────────────────────────────────────────────")
-    logger.info("  Total                   ~43.5 GB")
+    logger.info("  Total                   ~43.7 GB")
     logger.info("")
-    logger.info("NOTE: Verification skipped to prevent downloading")
-    logger.info("      unwanted files. Runtime loading will validate.")
+    logger.info("NOTE: Strict cache verification is enabled.")
+    logger.info("      Each repo is validated for required runtime files.")
     logger.info("=" * 60)
 
     total   = len(MODELS)
@@ -186,7 +283,7 @@ def preload():
 
         logger.info(f"--- [{idx}/{total}] {repo_id} ({m_type}) ---")
 
-        if is_cached(repo_id):
+        if is_cached_and_valid(model):
             logger.info(f"Already cached, skipping: {repo_id}")
             skipped += 1
             continue
@@ -198,7 +295,11 @@ def preload():
                 failed.append(repo_id)
             else:
                 handler(repo_id)
-                success += 1
+                if is_cached_and_valid(model):
+                    success += 1
+                else:
+                    logger.error(f"Post-download validation failed for {repo_id}")
+                    failed.append(repo_id)
 
         except Exception as e:
             logger.error(f"CRITICAL failure for {repo_id}: {e}", exc_info=True)
