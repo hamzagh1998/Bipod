@@ -4,7 +4,14 @@ import { checkAuthStatus } from "./auth.js";
 import { switchConversation } from "./conversations.js";
 import { setupEventListeners } from "./ui.js";
 
+// Global error handling for easier debugging
+window.onerror = function (msg, url, lineNo, columnNo, error) {
+  console.error("GLOBAL ERROR:", msg, "at", url, ":", lineNo, ":", columnNo);
+  return false;
+};
+
 async function init() {
+  console.log("Bipod initializing...");
   setupMarkdown();
   await checkAuthStatus();
 

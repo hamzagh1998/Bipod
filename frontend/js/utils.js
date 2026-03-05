@@ -1,3 +1,22 @@
+import { dom } from "./state.js";
+
+export function escapeHtml(text = "") {
+  return String(text)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+// --- UI Helpers ---
+export function closeSidebarOnMobile() {
+  if (dom.sidebar && window.innerWidth <= 768) {
+    dom.sidebar.classList.remove("mobile-open");
+    if (dom.sidebarOverlay) dom.sidebarOverlay.classList.remove("active");
+  }
+}
+
 // --- Toast Notification ---
 export function showToast(message, duration = 2000) {
   let toast = document.querySelector(".toast");

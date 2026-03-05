@@ -559,7 +559,7 @@ function displayBatchResults(results) {
     studioState.gallery.unshift(res);
   });
 
-  studioState.lastResult = results[0];
+  studioState.lastResult = results[0].type === "video" ? null : results[0].data;
   updatePreview(results[0]);
 
   if (studioDom.placeholderState)
@@ -626,7 +626,8 @@ function renderGallery() {
 
 function selectGalleryItem(idx) {
   const item = studioState.gallery[idx];
-  studioState.lastResult = item;
+  studioState.lastResult =
+    item && item.type === "video" ? null : typeof item === "string" ? item : item.data;
   updatePreview(item);
 
   document

@@ -146,6 +146,15 @@ class MemoryService:
             await session.refresh(new_msg)
             return new_msg
 
+    async def clear_conversation(self, conv_id: str):
+        """Deletes all messages for a conversation but keeps the conversation itself."""
+        async with AsyncSessionLocal() as session:
+            await session.execute(
+                delete(Message).where(Message.conversation_id == conv_id)
+            )
+            await session.commit()
+            logger.info(f"Cleared messages for conversation {conv_id}")
+
     async def get_messages(self, conv_id: str, user_id: int) -> List[Message]:
         async with AsyncSessionLocal() as session:
             # First check if conversation belongs to user

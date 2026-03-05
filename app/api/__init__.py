@@ -1,4 +1,7 @@
+import asyncio
 from fastapi import APIRouter, HTTPException, Body, Depends, Security
+from fastapi.responses import JSONResponse
+import httpx
 from typing import List, Optional
 from app.services.brain_service import brain_service
 from app.services.memory_service import memory_service
@@ -21,7 +24,6 @@ async def health_check():
 @router.get("/system/config")
 async def get_system_config():
     """Returns hardware capabilities and available models."""
-    import httpx
     try:
         # Proxy detailed hardware info from Imagine service
         async with httpx.AsyncClient(timeout=3.0) as client:
@@ -181,9 +183,51 @@ async def clear_memory(
     conversation_id: str = Body(..., embed=True),
     user_id: int = Depends(auth_service.get_current_user)
 ):
-    # Verify owner
-    await memory_service.get_conversation(conversation_id, user_id)
-    brain_service.clear_memory(conversation_id)
+    # Verify owner before clearing
+    conv = await memory_service.get_conversation(conversation_id, user_id)
+    if not conv:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    await brain_service.clear_memory(conversation_id)
     return {"status": "success", "message": f"Bipod has forgotten the recent past in {conversation_id}."}
 
+
+@router.post("/generate")
+async def generate_image(
+    payload: dict = Body(...),
+    user_id: int = Depends(auth_service.get_current_user)
+):
+    """Proxy image generation to the Imagine service for Studio UI."""
+    try:
+        async with httpx.AsyncClient(timeout=600.0) as client:
+            resp = await client.post(f"{settings.IMAGINE_API_URL}/generate", json=payload)
+
+        try:
+            content = resp.json()
+        except ValueError:
+            content = {"detail": resp.text}
+
+        return JSONResponse(status_code=resp.status_code, content=content)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Imagine service unavailable: {str(e)}")
+
+
+@router.post("/upscale")
+async def upscale_image(
+    payload: dict = Body(...),
+    user_id: int = Depends(auth_service.get_current_user)
+):
+    """Proxy AI upscaling to the Imagine service for Studio UI."""
+    try:
+        async with httpx.AsyncClient(timeout=300.0) as client:
+            resp = await client.post(f"{settings.IMAGINE_API_URL}/upscale", json=payload)
+
+        try:
+            content = resp.json()
+        except ValueError:
+            content = {"detail": resp.text}
+
+        return JSONResponse(status_code=resp.status_code, content=content)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Imagine service unavailable: {str(e)}")
 

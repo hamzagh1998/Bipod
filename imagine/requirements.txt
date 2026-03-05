@@ -2,8 +2,8 @@ fastapi
 uvicorn
 pillow
 accelerate
-diffusers
-transformers
+diffusers==0.30.3
+transformers==4.44.2
 scipy
 ftfy
 safetensors

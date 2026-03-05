@@ -20,4 +20,4 @@ numpy
 # PDF Processing
 pypdf
 duckduckgo-search
-semantic-router[local]
+semantic-router

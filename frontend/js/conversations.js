@@ -1,8 +1,7 @@
 import { state, dom } from "./state.js";
 import { apiFetch } from "./api.js";
-import { showToast, createWelcomeHero } from "./utils.js";
-import { appendMessage } from "./chat.js";
-import { closeSidebarOnMobile } from "./ui.js";
+import { showToast, createWelcomeHero, closeSidebarOnMobile } from "./utils.js";
+import { appendMessage } from "./message-renderer.js";
 
 export async function fetchConversations() {
   try {

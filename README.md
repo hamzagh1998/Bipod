@@ -142,7 +142,7 @@ To avoid long wait times during your first session, pre-download the model suite
    Run this in your terminal to authenticate (requires a Read access token from [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens)):
 
    ```bash
-   python3 -c "from huggingface_hub import login; login()"
+   docker exec -it bipod_imagine huggingface-cli login
    ```
 
 3. **Preload everything:**

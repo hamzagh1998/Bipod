@@ -5,23 +5,28 @@ ENV PYTHONUNBUFFERED=1
 
 WORKDIR /app
 
-# Install system dependencies
+# System dependencies
 RUN apt-get update && apt-get install -y \
     git \
     libgl1 \
     libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
-# 1. Install heavy ML base first (large downloads)
+# 1. PyTorch + torchvision + xformers from the PyTorch CUDA index
+#    bitsandbytes is NOT on the PyTorch index — install it separately below
 RUN pip install --no-cache-dir --timeout 1000 --retries 10 \
-    torch==2.5.1 torchvision==0.20.1 --index-url https://download.pytorch.org/whl/cu121
+    torch==2.5.1 \
+    torchvision==0.20.1 \
+    xformers==0.0.28.post3 \
+    --index-url https://download.pytorch.org/whl/cu124
 
-# 2. Install xformers and bitsandbytes (often problematic)
+# 2. bitsandbytes from PyPI (hosts the CUDA 12 build)
+#    Must be a separate RUN so pip uses the default PyPI index
 RUN pip install --no-cache-dir --timeout 1000 --retries 10 \
-    xformers bitsandbytes
+    bitsandbytes>=0.43.0
 
+# 3. Remaining requirements from PyPI
 COPY requirements.txt .
-
 RUN pip install --no-cache-dir --timeout 1000 --retries 10 -r requirements.txt
 
 COPY . .

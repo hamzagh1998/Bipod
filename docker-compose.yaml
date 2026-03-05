@@ -25,6 +25,7 @@ services:
       - "3333:3333"
     environment:
       - HF_HOME=/app/models
+      - HF_TOKEN=${HF_TOKEN}
       - OFFLINE_MODE=${OFFLINE_MODE:-true}
     volumes:
       - ./imagine:/app

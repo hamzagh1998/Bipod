@@ -12,10 +12,16 @@ export async function apiFetch(endpoint, options = {}) {
   }
 
   try {
-    const response = await fetch(`/api/v1${endpoint}`, {
+    const url = `/api/v1${endpoint}`;
+    console.log(`FETCH START [${options.method || "GET"}] ${url}`, {
+      headers,
+      body: options.body,
+    });
+    const response = await fetch(url, {
       ...options,
       headers,
     });
+    console.log(`FETCH END [${endpoint}] Status:`, response.status);
 
     if (response.status === 401 && !endpoint.includes("/auth/")) {
       // Unauthorized (except for auth routes themselves)

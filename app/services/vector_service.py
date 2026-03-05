@@ -23,6 +23,7 @@ class VectorService:
         if os.path.exists(self.index_path):
             try:
                 self.index = faiss.read_index(self.index_path)
+                self.dim = self.index.d
                 with open(self.metadata_path, 'r') as f:
                     self.metadata = json.load(f)
                 logger.info("Loaded existing FAISS index")
@@ -77,10 +78,21 @@ class VectorService:
         for i, chunk in enumerate(chunks):
             embedding = await self._get_embedding(chunk)
             if embedding:
-                # Update dimension if first run mismatch
-                if len(embedding) != self.dim:
-                    self.dim = len(embedding)
-                    self._create_empty_index()
+                embedding_dim = len(embedding)
+                # If index is empty, allow first embedding to define dimension.
+                if self.index.ntotal == 0 and embedding_dim != self.dim:
+                    logger.warning(
+                        f"Embedding dimension changed from {self.dim} to {embedding_dim}; reinitializing empty index dimension."
+                    )
+                    self.dim = embedding_dim
+                    self.index = faiss.IndexFlatL2(self.dim)
+                    self.metadata = []
+                elif embedding_dim != self.dim:
+                    # Never wipe index due to dimensional mismatch.
+                    logger.error(
+                        f"Skipping memory chunk with incompatible embedding dimension {embedding_dim} (expected {self.dim})."
+                    )
+                    continue
                 
                 vec = np.array([embedding]).astype('float32')
                 self.index.add(vec)
@@ -171,17 +183,34 @@ class VectorService:
 
             logger.info(f"Deleting {old_count - len(new_metadata)} memories for conversation {conversation_id}")
             
-            # Rebuild index
-            self.metadata = new_metadata
-            self._create_empty_index() # Clear current index
+            # Rebuild index without wiping the filtered metadata.
+            # Keep only rows that still have cached embeddings, otherwise index/metadata drift occurs.
+            rebuilt_metadata = [m for m in new_metadata if isinstance(m.get("embedding"), list)]
+            dropped_without_embedding = len(new_metadata) - len(rebuilt_metadata)
+            if dropped_without_embedding:
+                logger.warning(
+                    f"Dropping {dropped_without_embedding} metadata rows without cached embeddings during rebuild."
+                )
 
-            # Re-index remaining memories
+            index_dim = self.dim
+            if rebuilt_metadata:
+                first_dim = len(rebuilt_metadata[0]["embedding"])
+                same_dim_metadata = [m for m in rebuilt_metadata if len(m["embedding"]) == first_dim]
+                if len(same_dim_metadata) != len(rebuilt_metadata):
+                    logger.warning(
+                        f"Dropping {len(rebuilt_metadata) - len(same_dim_metadata)} rows with inconsistent embedding dimensions during rebuild."
+                    )
+                rebuilt_metadata = same_dim_metadata
+                index_dim = first_dim
+
+            self.index = faiss.IndexFlatL2(index_dim)
+            self.dim = index_dim
+            self.metadata = rebuilt_metadata
+
             if self.metadata:
-                embeddings = [m["embedding"] for m in self.metadata if "embedding" in m]
-                
-                if embeddings:
-                    vecs = np.array(embeddings).astype('float32')
-                    self.index.add(vecs)
+                embeddings = [m["embedding"] for m in self.metadata]
+                vecs = np.array(embeddings).astype('float32')
+                self.index.add(vecs)
             
             # Save updated state
             faiss.write_index(self.index, self.index_path)

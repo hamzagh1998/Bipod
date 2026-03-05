@@ -37,23 +37,23 @@ class BrainService:
             "You are helpful, concise, and intelligent. "
             "You can have natural conversations on any topic. "
             "You also have filesystem tools available. You can search, read, create, or update TEXT files. "
-            "You can execute shell commands for efficient searching (grep, find) or system tasks. "
+            "Arbitrary shell command execution is disabled for security reasons. "
             "You can ANALYZE and DESCRIBE existing images at specific paths using the vision model. "
             "You have a specialized tool to get real-time SYSTEM INFORMATION (CPU, GPU, OS, Time). "
             "### TOOL USAGE EXAMPLES:\n"
             "If you need to call a tool, output valid JSON within your response. Example:\n"
             "{\"name\": \"get_system_info\", \"arguments\": {}}\n"
-            "{\"name\": \"execute_system_command\", \"arguments\": {\"command\": \"ls -la\"}}\n\n"
+            "{\"name\": \"search_files\", \"arguments\": {\"pattern\": \"*.py\", \"root\": \"/\"}}\n\n"
             "### CORE DIRECTIVES:\n"
             "1. ALWAYS PRIORITIZE the current user message. Execute exactly what the user asks.\n"
-            "2. If a user asks to **draw**, **create**, **make**, or **generate** an image, you **MUST** use the `generate_image` tool. **NEVER** try to use `execute_system_command` for this.\n"
+            "2. If a user asks to **draw**, **create**, **make**, or **generate** an image, you **MUST** use the `generate_image` tool.\n"
             "3. Use `search_files` to find filenames. Use `read_file` to see content. Use `save_file` to persist progress.\n"
             "4. DO NOT explain why you are using a tool unless it's a complex multi-step process.\n"
-            "5. If a specialized tool exists (save_file, generate_image, search_files), use it instead of `execute_system_command`.\n"
+            "5. Use specialized tools (save_file, generate_image, search_files, read_file) for all tasks.\n"
             "6. EACH CONVERSATION IS INDEPENDENT. Do not mix up content from different sessions.\n"
             "7. For image generation, the `model_type` MUST be one of: 'sdxl-lightning' (fast, default), 'flux-schnell' (photoreal - requires high VRAM), 'stable-diffusion' (balanced), or 'dalle-mini' (low resource). DO NOT use any other words for `model_type`.\n"
             "8. ALWAYS provide the actual file path returned by the tool when confirming a task (e.g. 'Image saved to /app/data/...'). If an image was generated, you MUST include the markdown preview (e.g. ![Generated Image](/generated/filename.jpg)) EXACTLY as returned by the tool so the user can see it in the chat.\n"
-            "[SYSTEM: TOOLS]\n1. `read_file`: Reads text/PDF from the host. \n2. `save_file`: Writes text to the host. \n3. `move_file`: Moves/renames files/dirs on the host. Supports wildcards (e.g. *.pdf). \n4. `delete_file`: Deletes files/dirs on the host. Supports wildcards. \n5. `search_files`: Finds files by pattern. \n6. `execute_system_command`: Runs shell commands (use for complex tasks). Prefix host paths with /host.\n7. `get_system_info`: Returns CPU/GPU usage, model info, and current time. \n8. `web_search`: Searches the internet. \n9. `fetch_web_page`: Reads a URL.\n10. `organize_files`: Automatically sorts files in a directory into folders by their extension (e.g. 'pdf/', 'docx/').\n\n"
+            "[SYSTEM: TOOLS]\n1. `read_file`: Reads text/PDF from the host. \n2. `save_file`: Writes text to the host. \n3. `move_file`: Moves/renames files/dirs on the host. Supports wildcards (e.g. *.pdf). \n4. `delete_file`: Deletes files/dirs on the host. Supports wildcards. \n5. `search_files`: Finds files by pattern. \n6. `get_system_info`: Returns CPU/GPU usage, model info, and current time. \n7. `web_search`: Searches the internet. \n8. `fetch_web_page`: Reads a URL.\n9. `organize_files`: Automatically sorts files in a directory into folders by their extension (e.g. 'pdf/', 'docx/').\n\n"
             "- If you decide to call a tool, you MUST NOT say anything. Your entire response must be ONLY the JSON tool call.\n"
             "- THE USER CANNOT SEE YOUR TOOL CALLS. If you narrate them, you are talking to yourself and confusing the user.\n"
             "- Just do the work. Once the tool finishes, you can give a final summary.\n"
@@ -197,7 +197,7 @@ class BrainService:
                 "type": "function",
                 "function": {
                     "name": "execute_system_command",
-                    "description": "Executes a shell command on the host system. Use this ONLY for complex operations that specific tools (move_file, delete_file, search_files, organize_files) cannot handle. IMPORTANT: Any absolute paths starting with / MUST be prefixed with /host in your command string (e.g. 'ls /host/home/user').",
+                    "description": "Legacy tool retained for compatibility. Arbitrary shell execution is disabled for security reasons.",
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -563,15 +563,10 @@ class BrainService:
                                 organized_count = await file_service.organize_host_directory(args.get("directory"))
                                 result = f"Successfully organized {organized_count} files in '{args.get('directory')}'."
                             elif fn_name == "execute_system_command":
-                                import subprocess
-                                # Handle 'cmd' alias (common hallucination)
-                                command = args.get("command") or args.get("cmd")
-                                if not command:
-                                    result = "Error: Missing 'command' argument."
-                                else:
-                                    logger.info(f"Running system command: {command}")
-                                    p = subprocess.run(command, shell=True, capture_output=True, text=True, timeout=15)
-                                    result = p.stdout if p.returncode == 0 else f"Error: {p.stderr}"
+                                result = (
+                                    "Error: execute_system_command is disabled for security reasons. "
+                                    "Use specialized tools such as search_files, read_file, save_file, move_file, or delete_file."
+                                )
                             elif fn_name == "get_system_info":
                                 # 1. Basic OS/Time
                                 now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -766,7 +761,7 @@ class BrainService:
 
     async def clear_memory(self, conversation_id: str):
         await memory_service.clear_conversation(conversation_id)
-        await vector_service.delete_conversation(conversation_id)
+        await vector_service.delete_conversation_memories(conversation_id)
 
     async def _unload_ollama(self):
         """Tells Ollama to unload all models from VRAM to make room for Image Gen."""

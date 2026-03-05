@@ -1,134 +1,26 @@
 import { state, dom } from "./state.js";
 import { apiFetch } from "./api.js";
-import { wrapCodeBlocks, copyToClipboard } from "./utils.js";
 import { fetchConversations } from "./conversations.js";
 import { renderAttachmentPreviews } from "./attachments.js";
-
-export function appendMessage(role, text, shouldScroll = true) {
-  const hero = document.getElementById("welcome-hero");
-  if (hero) hero.remove();
-
-  const msgDiv = document.createElement("div");
-  msgDiv.className = `message ${role}`;
-
-  const contentDiv = document.createElement("div");
-  contentDiv.className = "message-content";
-
-  if (role === "ai") {
-    // More robust regex for image path detection (case-insensitive, handles optional colons/backticks)
-    const imgMatch = text.match(
-      /[sS]aved to:?\s+[`']?.*?\/generated\/([a-zA-Z0-9_-]+\.jpg)[`']?/i,
-    );
-    if (imgMatch) {
-      const filename = imgMatch[1];
-      // Append markdown image if not already present
-      if (!text.includes(`(/generated/${filename})`)) {
-        text += `\n\n![Generated Image](/generated/${filename})`;
-      }
-    }
-
-    msgDiv.dataset.rawContent = text;
-    contentDiv.innerHTML = marked.parse(text);
-    wrapCodeBlocks(contentDiv);
-    contentDiv.querySelectorAll("pre code").forEach((block) => {
-      hljs.highlightElement(block);
-    });
-
-    // Add Lightbox support to all images in the AI response
-    contentDiv.querySelectorAll("img").forEach((img) => {
-      img.style.cursor = "zoom-in";
-      img.onclick = () => {
-        dom.lightboxImg.src = img.src;
-        dom.lightbox.classList.add("active");
-      };
-    });
-
-    const actionsDiv = document.createElement("div");
-    actionsDiv.className = "msg-actions";
-
-    const copyBtn = document.createElement("button");
-    copyBtn.className = "msg-action-btn";
-    copyBtn.innerHTML =
-      '<span class="material-symbols-rounded">content_copy</span> Copy';
-    copyBtn.onclick = () => copyToClipboard(text);
-    actionsDiv.appendChild(copyBtn);
-
-    const downloadBtn = document.createElement("button");
-    downloadBtn.className = "msg-action-btn";
-    downloadBtn.innerHTML =
-      '<span class="material-symbols-rounded">download</span> Download';
-    downloadBtn.onclick = () => {
-      const img = contentDiv.querySelector("img");
-      if (img) {
-        const url = img.src;
-        const filename = url.split("/").pop();
-        downloadImage(url, filename);
-      }
-    };
-    actionsDiv.appendChild(downloadBtn);
-
-    contentDiv.appendChild(actionsDiv);
-  } else if (role === "system") {
-    contentDiv.innerText = text;
-  } else {
-    msgDiv.dataset.rawContent = text;
-    contentDiv.innerHTML = `<p>${text.replace(/\n/g, "<br>")}</p>`;
-
-    // Show attachments in user message bubble
-    if (state.currentAttachments.length > 0) {
-      const attachmentsDiv = document.createElement("div");
-      attachmentsDiv.className = "message-attachments";
-      state.currentAttachments.forEach((att) => {
-        if (att.type === "image") {
-          const img = document.createElement("img");
-          img.src = `data:image/jpeg;base64,${att.content}`;
-          img.className = "msg-attachment-img";
-          attachmentsDiv.appendChild(img);
-        } else {
-          const pdfIcon = document.createElement("div");
-          pdfIcon.className = "msg-attachment-pdf";
-          pdfIcon.innerHTML = `<span class="material-symbols-rounded">description</span><span>${att.name}</span>`;
-          attachmentsDiv.appendChild(pdfIcon);
-        }
-      });
-      contentDiv.appendChild(attachmentsDiv);
-    }
-
-    const userActions = document.createElement("div");
-    userActions.className = "msg-actions user-msg-actions";
-
-    const editBtn = document.createElement("button");
-    editBtn.className = "msg-action-btn";
-    editBtn.innerHTML =
-      '<span class="material-symbols-rounded">edit</span> Edit';
-    editBtn.onclick = () => {
-      dom.userInput.value = text;
-      dom.userInput.focus();
-      dom.userInput.style.height = "auto";
-      dom.userInput.style.height = dom.userInput.scrollHeight + "px";
-    };
-    userActions.appendChild(editBtn);
-
-    const resendBtn = document.createElement("button");
-    resendBtn.className = "msg-action-btn";
-    resendBtn.innerHTML =
-      '<span class="material-symbols-rounded">refresh</span> Resend';
-    resendBtn.onclick = () => sendMessage(text);
-    userActions.appendChild(resendBtn);
-
-    contentDiv.appendChild(userActions);
-  }
-
-  msgDiv.appendChild(contentDiv);
-  dom.chatWindow.insertBefore(msgDiv, dom.loadingIndicator);
-  if (shouldScroll) dom.chatWindow.scrollTop = dom.chatWindow.scrollHeight;
-}
+import { appendMessage } from "./message-renderer.js";
 
 export async function sendMessage(text) {
+  console.log("Chat: sendMessage triggered with text:", text);
   if (!text && state.currentAttachments.length === 0) return;
+
+  // Check if marked is available
+  if (typeof marked === "undefined") {
+    console.error("CRITICAL: marked.js library not loaded!");
+    appendMessage(
+      "system",
+      "⚠ System error: Markdown renderer missing. Refreshing may help.",
+    );
+    return;
+  }
 
   // Auto-create conversation if none selected
   if (!state.currentConversationId) {
+    console.log("Chat: No conversation ID, attempting auto-create...");
     try {
       const response = await apiFetch("/conversations", {
         method: "POST",
@@ -138,28 +30,35 @@ export async function sendMessage(text) {
       state.currentConversationId = data.id;
       await fetchConversations();
     } catch (e) {
-      console.error("Failed to auto-create conversation", e);
+      console.error("Chat: Failed to auto-create conversation:", e);
       appendMessage("system", "⚠ Failed to initialize conversation.");
       return;
     }
   }
 
   const sentForId = state.currentConversationId;
+  console.log("Conversation ID:", sentForId); // DEBUG
   appendMessage("user", text);
-  dom.loadingIndicator.classList.remove("hidden");
-  dom.chatWindow.scrollTop = dom.chatWindow.scrollHeight;
+
+  if (dom.loadingIndicator) dom.loadingIndicator.classList.remove("hidden");
+  if (dom.chatWindow) dom.chatWindow.scrollTop = dom.chatWindow.scrollHeight;
 
   try {
+    const payload = {
+      message: text,
+      conversation_id: sentForId,
+      model_id: dom.modelSelect ? dom.modelSelect.value : null,
+      reasoning_mode: dom.modeSelect ? dom.modeSelect.value : "normal",
+      imagine_model: dom.imagineModelSelect
+        ? dom.imagineModelSelect.value
+        : "sdxl-lightning",
+      attachments: state.currentAttachments,
+    };
+    console.log("Payload:", payload); // DEBUG
+
     const response = await apiFetch("/chat", {
       method: "POST",
-      body: JSON.stringify({
-        message: text,
-        conversation_id: sentForId,
-        model_id: dom.modelSelect.value,
-        reasoning_mode: dom.modeSelect.value,
-        imagine_model: dom.imagineModelSelect.value,
-        attachments: state.currentAttachments,
-      }),
+      body: JSON.stringify(payload),
     });
 
     state.currentAttachments = [];
