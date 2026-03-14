@@ -5,11 +5,13 @@ import sys
 import glob
 from huggingface_hub import snapshot_download
 
+LOG_PATH = "/app/preload.log" if os.path.isdir("/app") else os.path.join(os.getcwd(), "preload.log")
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     handlers=[
-        logging.FileHandler("/app/preload.log"),
+        logging.FileHandler(LOG_PATH),
         logging.StreamHandler(sys.stdout),
     ],
 )

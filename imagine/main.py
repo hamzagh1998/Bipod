@@ -1,5 +1,6 @@
 import os
 import gc
+import binascii
 
 os.environ["HF_HUB_DISABLE_SYMLINKS"] = "1"
 os.environ["PYTORCH_ALLOC_CONF"] = "expandable_segments:True"
@@ -197,6 +198,17 @@ def should_use_sequential_offload(vram_tier: Optional[str]) -> bool:
     if vram_tier is None:
         return False
     return vram_tier in ("low", "mid_low")
+
+
+def decode_base64_image(image_data: str) -> bytes:
+    payload = image_data
+    if image_data.startswith("data:image") and "," in image_data:
+        payload = image_data.split(",", 1)[1]
+
+    try:
+        return base64.b64decode(payload, validate=True)
+    except (binascii.Error, ValueError) as e:
+        raise HTTPException(status_code=400, detail=f"Invalid base64 image data: {e}")
 
 
 # ---------------------------------------------------------------------------
@@ -594,7 +606,7 @@ async def generate_image(req: GenerateRequest):
 
         if req.image:
             # img2img — SDXL / SD 1.5 only (Flux blocked above)
-            img_bytes  = base64.b64decode(req.image)
+            img_bytes  = decode_base64_image(req.image)
             init_image = Image.open(BytesIO(img_bytes)).convert("RGB")
             init_image = init_image.resize((width, height), Image.Resampling.LANCZOS)
             output = i2i(
@@ -688,11 +700,19 @@ async def upscale_image(req: UpscaleRequest):
         model_id = "caidas/swin2SR-classical-sr-x2-64"
         device   = get_device()
 
-        processor = Swin2SRImageProcessor.from_pretrained(model_id, cache_dir=HF_HOME)
-        model     = Swin2SRForImageSuperResolution.from_pretrained(model_id, cache_dir=HF_HOME)
+        processor = Swin2SRImageProcessor.from_pretrained(
+            model_id,
+            cache_dir=HF_HOME,
+            local_files_only=OFFLINE_MODE,
+        )
+        model = Swin2SRForImageSuperResolution.from_pretrained(
+            model_id,
+            cache_dir=HF_HOME,
+            local_files_only=OFFLINE_MODE,
+        )
         model.to(device)
 
-        img_bytes  = base64.b64decode(req.image)
+        img_bytes  = decode_base64_image(req.image)
         init_image = Image.open(BytesIO(img_bytes)).convert("RGB")
         inputs     = processor(init_image, return_tensors="pt").to(device)
 
@@ -780,7 +800,7 @@ def list_models():
             "use_case": "Best photorealism, text in image, complex prompts",
             "supports_img2img":         False,
             "supports_negative_prompt": False,
-            "available":           total_vram >= FLUX_MIN_VRAM_GB or device != "cuda",
+            "available":           device == "cuda" and total_vram >= FLUX_MIN_VRAM_GB,
             "requires_vram_gb":    FLUX_MIN_VRAM_GB,
             "quantization":        "NF4 4-bit T5 on <10GB cards",
         },
