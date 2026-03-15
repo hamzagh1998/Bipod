@@ -1,6 +1,7 @@
 import asyncio
 from types import SimpleNamespace
 
+import httpx
 import app.services.brain_service as brain_module
 from app.services.brain.contracts import ContextBundle, OrchestrationResult, RoutingDecision
 from app.services.brain_service import BrainService
@@ -165,3 +166,70 @@ def test_resolve_requested_model_allows_light_model_on_arm64(monkeypatch):
     resolved = brain._resolve_requested_model(brain_module.settings.LIGHT_MODEL)
 
     assert resolved == brain_module.settings.LIGHT_MODEL
+
+
+def test_ollama_request_timeout_uses_configured_read_budget(monkeypatch):
+    brain = BrainService()
+
+    monkeypatch.setattr(brain_module.settings, "OLLAMA_CHAT_TIMEOUT_SEC", 111)
+    monkeypatch.setattr(brain_module.settings, "OLLAMA_TOOL_CHAT_TIMEOUT_SEC", 222)
+
+    chat_timeout = brain._ollama_request_timeout(include_tools=False)
+    tools_timeout = brain._ollama_request_timeout(include_tools=True)
+
+    assert chat_timeout.read == 111
+    assert tools_timeout.read == 222
+    assert chat_timeout.connect == brain.OLLAMA_CONNECT_TIMEOUT_SEC
+
+
+def test_think_returns_useful_message_on_ollama_timeout(monkeypatch):
+    brain = BrainService()
+
+    async def fake_add_message(*args, **kwargs):
+        return SimpleNamespace(id=42)
+
+    async def fake_get_messages(*args, **kwargs):
+        return []
+
+    async def fake_build(*args, **kwargs):
+        return ContextBundle(system_prompt="sys", recent_messages=[])
+
+    async def fake_route(*args, **kwargs):
+        return RoutingDecision(
+            mode="chat",
+            reason="plain_chat",
+            intent=None,
+            allowed_tools=[],
+        )
+
+    async def fake_run(*args, **kwargs):
+        raise httpx.ReadTimeout("timed out")
+
+    class FakeAsyncClient:
+        def __init__(self, *args, **kwargs):
+            self.timeout = kwargs.get("timeout")
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setattr(brain_module.memory_service, "add_message", fake_add_message)
+    monkeypatch.setattr(brain_module.memory_service, "get_messages", fake_get_messages)
+    monkeypatch.setattr(brain.context_builder, "build", fake_build)
+    monkeypatch.setattr(brain.router, "route", fake_route)
+    monkeypatch.setattr(brain.tool_orchestrator, "run", fake_run)
+    monkeypatch.setattr(brain_module.httpx, "AsyncClient", FakeAsyncClient)
+    monkeypatch.setattr(brain_module.settings, "OLLAMA_CHAT_TIMEOUT_SEC", 123)
+
+    result = asyncio.run(
+        brain.think(
+            user_input="hello",
+            conversation_id="conv-1",
+            user_id=7,
+        )
+    )
+
+    assert "did not respond within 123 seconds" in result
+    assert "warming up" in result

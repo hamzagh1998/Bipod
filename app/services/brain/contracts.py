@@ -43,6 +43,7 @@ class OrchestrationResult(BaseModel):
     tool_results_summary: List[str] = Field(default_factory=list)
     generated_images: List[str] = Field(default_factory=list)
     executed_tools: List[str] = Field(default_factory=list)
+    image_generation_result: str = ""
 
 
 class BrainResponse(BaseModel):

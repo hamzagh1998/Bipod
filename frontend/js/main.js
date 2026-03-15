@@ -81,7 +81,16 @@ async function init() {
         config.available_imagine_models.forEach((m) => {
           const opt = document.createElement("option");
           opt.value = m.id;
-          opt.textContent = `${m.name} (${m.req})`;
+          const requirementLabel =
+            m.req ||
+            (typeof m.requires_vram_gb === "number"
+              ? `${m.requires_vram_gb}+ GB VRAM`
+              : null) ||
+            m.vram_usage ||
+            null;
+          opt.textContent = requirementLabel
+            ? `${m.name} (${requirementLabel})`
+            : m.name;
           // VRAM check for Flux / SDXL
           if (m.available === false) {
             opt.disabled = true;

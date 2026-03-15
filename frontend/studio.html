@@ -48,8 +48,14 @@
         </div>
         <div class="sidebar-divider"></div>
         <div id="studio-gallery-sidebar" class="history-container">
-          <!-- Gallery thumbnails can go here too or keep it simple -->
-          <div class="sidebar-section-label">Session Gallery</div>
+          <div class="sidebar-section-label">Projects</div>
+          <button id="studio-new-project-btn" class="nav-btn secondary-nav">
+            <span class="material-symbols-rounded">create_new_folder</span>
+            New Project
+          </button>
+          <div id="studio-project-list" class="studio-project-list"></div>
+
+          <div class="sidebar-section-label">Project Images</div>
           <div id="sidebar-gallery" class="gallery-strip-vertical">
             <!-- Thumbnails added via JS -->
           </div>
@@ -146,7 +152,12 @@
                 </div>
 
                 <div class="control-group">
-                  <label>Prompt</label>
+                  <label class="control-label-row">
+                    <span>Prompt</span>
+                    <button type="button" id="studio-improve-prompt-btn" class="mini-action-btn">
+                      AI Improve
+                    </button>
+                  </label>
                   <textarea
                     id="studio-prompt"
                     rows="3"
@@ -155,7 +166,12 @@
                 </div>
 
                 <div class="control-group">
-                  <label>Negative Prompt</label>
+                  <label class="control-label-row">
+                    <span>Negative Prompt</span>
+                    <button type="button" id="studio-improve-negative-btn" class="mini-action-btn">
+                      AI Improve
+                    </button>
+                  </label>
                   <textarea
                     id="studio-negative-prompt"
                     rows="2"
@@ -205,6 +221,71 @@
                   </div>
                   <div class="res-readout" id="studio-res-readout">
                     1024 x 1024
+                  </div>
+                </div>
+
+                <div class="control-group">
+                  <label
+                    >Resolution Target:
+                    <span id="studio-resolution-val">1024</span></label
+                  >
+                  <select
+                    id="studio-resolution"
+                  >
+                    <option value="512">512</option>
+                    <option value="640">640</option>
+                    <option value="768">768</option>
+                    <option value="896">896</option>
+                    <option value="1024" selected>1024</option>
+                    <option value="1152">1152</option>
+                    <option value="1280">1280</option>
+                    <option value="1536">1536</option>
+                    <option value="1792">1792</option>
+                    <option value="2048">2048</option>
+                    <option value="2560">2560</option>
+                    <option value="3072">3072</option>
+                    <option value="3584">3584</option>
+                    <option value="4096">4096</option>
+                  </select>
+                  <div class="res-readout" id="studio-resolution-hint">
+                    Generate at a safe native size, then use 2x/4x/8x upscale for larger exports.
+                  </div>
+                </div>
+
+                <div class="control-group">
+                  <label>Upscale Engine</label>
+                  <select id="studio-upscaler">
+                    <option value="realesrgan" selected>Real-ESRGAN (recommended)</option>
+                    <option value="swin2sr">Swin2SR</option>
+                  </select>
+                </div>
+
+                <div class="control-group">
+                  <label>Export Format</label>
+                  <select id="studio-output-format">
+                    <option value="jpeg" selected>JPEG</option>
+                    <option value="png">PNG</option>
+                    <option value="webp">WebP</option>
+                  </select>
+                  <div class="res-readout">
+                    JPEG is smaller and faster. PNG keeps lossless detail. WebP is a middle ground.
+                  </div>
+                </div>
+
+                <div class="control-group">
+                  <label>Upscale Upload</label>
+                  <div class="drop-zone" id="studio-upscale-drop-zone">
+                    <span class="material-symbols-rounded">image_arrow_up</span>
+                    <p>Upload an image to preview and upscale it directly</p>
+                    <input
+                      type="file"
+                      id="studio-upscale-file-input"
+                      accept="image/*"
+                      hidden
+                    />
+                  </div>
+                  <div class="res-readout">
+                    The uploaded image appears in the preview. Use 2x, 4x, or 8x without generating first.
                   </div>
                 </div>
 
@@ -262,12 +343,42 @@
                     loop
                   ></video>
                   <div class="preview-actions" style="display: none">
-                    <button id="studio-upscale-btn" title="Upscale 2x (AI)">
-                      <span class="material-symbols-rounded">high_quality</span>
-                      Upscale 2x
-                    </button>
+                    <div
+                      id="studio-upscale-controls"
+                      class="upscale-controls"
+                      role="group"
+                      aria-label="AI upscale options"
+                    >
+                      <button
+                        type="button"
+                        class="upscale-factor-btn active"
+                        data-upscale-factor="2"
+                        title="AI upscale 2x"
+                      >
+                        2x
+                      </button>
+                      <button
+                        type="button"
+                        class="upscale-factor-btn"
+                        data-upscale-factor="4"
+                        title="AI upscale 4x"
+                      >
+                        4x
+                      </button>
+                      <button
+                        type="button"
+                        class="upscale-factor-btn"
+                        data-upscale-factor="8"
+                        title="AI upscale 8x"
+                      >
+                        8x
+                      </button>
+                    </div>
                     <button id="studio-download-btn" title="Download Image">
                       <span class="material-symbols-rounded">download</span>
+                    </button>
+                    <button id="studio-delete-image-btn" title="Delete Image">
+                      <span class="material-symbols-rounded">delete</span>
                     </button>
                   </div>
                   <div class="loading-overlay" style="display: none">
@@ -284,7 +395,7 @@
         </main>
 
         <footer style="padding: 10px; opacity: 0.6; font-size: 0.7rem">
-          Bipod Imagine Studio — Powered by local SDXL & Swin2SR
+          Bipod Imagine Studio — Powered by local SDXL, Swin2SR & Real-ESRGAN
         </footer>
       </div>
     </div>
@@ -318,6 +429,6 @@
       </div>
     </div>
 
-    <script type="module" src="/static/js/studio.js?v=1.2"></script>
+    <script type="module" src="/static/js/studio.js?v=1.13"></script>
   </body>
 </html>

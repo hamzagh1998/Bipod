@@ -1,20 +1,30 @@
 import asyncio
-from fastapi import APIRouter, HTTPException, Body, Depends, Security
-from fastapi.responses import JSONResponse
+import contextlib
+import json
+from fastapi import APIRouter, HTTPException, Body, Depends
+from fastapi.encoders import jsonable_encoder
+from fastapi.responses import JSONResponse, StreamingResponse
 import httpx
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 from app.services.brain_service import brain_service
 from app.services.memory_service import memory_service
 from app.services.auth_service import auth_service
+from app.services.studio_service import studio_service
 from app.core.config import settings
 from app.api.schemas import * # We'll use specific imports below to be safe
 
 router = APIRouter()
 
+
+def _encode_stream_event(event_type: str, **payload: Any) -> bytes:
+    return (json.dumps({"type": event_type, **payload}, ensure_ascii=True) + "\n").encode("utf-8")
+
 # --- Auth Models ---
 from app.api.schemas import (
     UserAuth, Token, UserResponse, ConversationResponse, MessageResponse,
-    ChatRequest, ChatResponse, ConversationUpdate, ArchiveUnlock
+    ChatRequest, ChatResponse, ConversationUpdate, ArchiveUnlock,
+    StudioProjectCreate, StudioProjectResponse, StudioImageResponse,
+    StudioPromptImproveRequest, StudioPromptImproveResponse,
 )
 
 @router.get("/health")
@@ -184,6 +194,69 @@ async def chat(
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
+@router.post("/chat/stream")
+async def chat_stream(
+    payload: ChatRequest,
+    user_id: int = Depends(auth_service.get_current_user),
+):
+    conv = await memory_service.get_conversation(payload.conversation_id, user_id)
+    if not conv:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    queue: asyncio.Queue[Dict[str, Any]] = asyncio.Queue()
+
+    async def emit_progress(event: str, data: Dict[str, Any]) -> None:
+        await queue.put({"type": event, **data})
+
+    async def run_chat() -> None:
+        try:
+            response_text = await brain_service.think(
+                payload.message,
+                payload.conversation_id,
+                user_id,
+                model_id=payload.model_id,
+                reasoning_mode=payload.reasoning_mode,
+                imagine_model=payload.imagine_model,
+                attachments=[a.model_dump() for a in payload.attachments] if payload.attachments else None,
+                progress_callback=emit_progress,
+            )
+            await queue.put({"type": "response", "text": response_text})
+        except HTTPException as exc:
+            await queue.put({"type": "error", "detail": exc.detail, "status_code": exc.status_code})
+        except Exception as exc:
+            await queue.put({"type": "error", "detail": str(exc), "status_code": 500})
+        finally:
+            await queue.put({"type": "done"})
+
+    async def stream_events():
+        task = asyncio.create_task(run_chat())
+        try:
+            while True:
+                try:
+                    event = await asyncio.wait_for(queue.get(), timeout=0.5)
+                except asyncio.TimeoutError:
+                    continue
+
+                event_type = event.pop("type", "status")
+                yield _encode_stream_event(event_type, **event)
+                if event_type in {"done", "error"}:
+                    break
+        finally:
+            if not task.done():
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
+
+    return StreamingResponse(
+        stream_events(),
+        media_type="application/x-ndjson",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
 @router.post("/clear")
 async def clear_memory(
     conversation_id: str = Body(..., embed=True),
@@ -205,6 +278,10 @@ async def generate_image(
 ):
     """Proxy image generation to the Imagine service for Studio UI."""
     try:
+        project_id = payload.pop("project_id", None)
+        if project_id and not await studio_service.get_project(project_id, user_id):
+            raise HTTPException(status_code=404, detail="Project not found")
+        await brain_service._unload_ollama()
         async with httpx.AsyncClient(timeout=600.0) as client:
             resp = await client.post(f"{settings.IMAGINE_API_URL}/generate", json=payload)
 
@@ -213,7 +290,25 @@ async def generate_image(
         except ValueError:
             content = {"detail": resp.text}
 
-        return JSONResponse(status_code=resp.status_code, content=content)
+        if (
+            resp.status_code == 200
+            and project_id
+            and content.get("status") == "success"
+            and content.get("image_base64")
+        ):
+            saved_image = await studio_service.add_project_image(
+                project_id=project_id,
+                user_id=user_id,
+                image_base64=content["image_base64"],
+                mime_type=content.get("mime_type", "image/jpeg"),
+                file_extension=content.get("file_extension", "jpg"),
+                metadata=content,
+            )
+            content["saved_image"] = saved_image
+
+        return JSONResponse(status_code=resp.status_code, content=jsonable_encoder(content))
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Imagine service unavailable: {str(e)}")
 
@@ -225,7 +320,11 @@ async def upscale_image(
 ):
     """Proxy AI upscaling to the Imagine service for Studio UI."""
     try:
-        async with httpx.AsyncClient(timeout=300.0) as client:
+        project_id = payload.pop("project_id", None)
+        if project_id and not await studio_service.get_project(project_id, user_id):
+            raise HTTPException(status_code=404, detail="Project not found")
+        await brain_service._unload_ollama()
+        async with httpx.AsyncClient(timeout=1200.0) as client:
             resp = await client.post(f"{settings.IMAGINE_API_URL}/upscale", json=payload)
 
         try:
@@ -233,6 +332,96 @@ async def upscale_image(
         except ValueError:
             content = {"detail": resp.text}
 
-        return JSONResponse(status_code=resp.status_code, content=content)
+        if (
+            resp.status_code == 200
+            and project_id
+            and content.get("status") == "success"
+            and content.get("image_base64")
+        ):
+            saved_image = await studio_service.add_project_image(
+                project_id=project_id,
+                user_id=user_id,
+                image_base64=content["image_base64"],
+                mime_type=content.get("mime_type", "image/jpeg"),
+                file_extension=content.get("file_extension", "jpg"),
+                metadata=content,
+            )
+            content["saved_image"] = saved_image
+
+        return JSONResponse(status_code=resp.status_code, content=jsonable_encoder(content))
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Imagine service unavailable: {str(e)}")
+
+
+@router.get("/studio/projects", response_model=List[StudioProjectResponse])
+async def list_studio_projects(user_id: int = Depends(auth_service.get_current_user)):
+    return await studio_service.list_projects(user_id)
+
+
+@router.post("/studio/projects", response_model=StudioProjectResponse)
+async def create_studio_project(
+    payload: StudioProjectCreate,
+    user_id: int = Depends(auth_service.get_current_user),
+):
+    project = await studio_service.create_project(user_id, payload.title)
+    return {
+        "id": project.id,
+        "title": project.title,
+        "created_at": project.created_at,
+        "image_count": 0,
+        "cover_image_url": None,
+    }
+
+
+@router.delete("/studio/projects/{project_id}")
+async def delete_studio_project(
+    project_id: str,
+    user_id: int = Depends(auth_service.get_current_user),
+):
+    deleted = await studio_service.delete_project(project_id, user_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return {"status": "success"}
+
+
+@router.get("/studio/projects/{project_id}/images", response_model=List[StudioImageResponse])
+async def list_studio_project_images(
+    project_id: str,
+    user_id: int = Depends(auth_service.get_current_user),
+):
+    project = await studio_service.get_project(project_id, user_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return await studio_service.list_project_images(project_id, user_id)
+
+
+@router.delete("/studio/projects/{project_id}/images/{image_id}")
+async def delete_studio_project_image(
+    project_id: str,
+    image_id: str,
+    user_id: int = Depends(auth_service.get_current_user),
+):
+    deleted = await studio_service.delete_project_image(project_id, image_id, user_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Image not found")
+    return {"status": "success"}
+
+
+@router.post("/studio/prompt-improve", response_model=StudioPromptImproveResponse)
+async def improve_studio_prompt(
+    payload: StudioPromptImproveRequest,
+    user_id: int = Depends(auth_service.get_current_user),
+):
+    _ = user_id
+    try:
+        return await brain_service.improve_studio_prompts(
+            prompt=payload.prompt,
+            negative_prompt=payload.negative_prompt or "",
+            model_type=payload.model_type,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Prompt improvement failed: {str(e)}")

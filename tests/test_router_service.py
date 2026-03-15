@@ -69,6 +69,17 @@ def test_route_image_request_uses_generate_image(monkeypatch):
     assert decision.allowed_tools == ["generate_image"]
 
 
+def test_route_malformed_image_request_still_uses_generate_image(monkeypatch):
+    router = RouterService()
+    monkeypatch.setattr(router, "_route_with_semantic_fallback", _async_return(None))
+
+    decision = asyncio.run(router.route("generate an of spaceship orbiting earth"))
+
+    assert decision.mode == "tools"
+    assert decision.intent == "image_generation"
+    assert decision.allowed_tools == ["generate_image"]
+
+
 def test_semantic_fallback_can_route_when_enabled(monkeypatch):
     router = RouterService()
     monkeypatch.setattr(

@@ -3,6 +3,7 @@ import logging
 import os
 import sys
 import glob
+from urllib.request import urlretrieve
 from huggingface_hub import snapshot_download
 
 LOG_PATH = "/app/preload.log" if os.path.isdir("/app") else os.path.join(os.getcwd(), "preload.log")
@@ -19,6 +20,11 @@ logger = logging.getLogger("bipod.preload")
 
 os.environ["HF_HUB_DISABLE_SYMLINKS"] = "1"
 HF_HOME = os.environ.get("HF_HOME", "/app/models")
+REALESRGAN_MODEL_FILENAME = "RealESRGAN_x4plus.pth"
+REALESRGAN_MODEL_URL = (
+    "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.1.0/"
+    "RealESRGAN_x4plus.pth"
+)
 
 MODELS = [
     {"id": "SG161222/Realistic_Vision_V6.0_B1_noVAE",   "type": "sd"},
@@ -28,6 +34,7 @@ MODELS = [
     {"id": "madebyollin/sdxl-vae-fp16-fix",             "type": "vae"},
     {"id": "segmind/tiny-sd",                           "type": "sd"},
     {"id": "caidas/swin2SR-classical-sr-x2-64",         "type": "transformer"},
+    {"id": REALESRGAN_MODEL_URL,                        "type": "realesrgan"},
     {"id": "black-forest-labs/FLUX.1-schnell",          "type": "flux"},
 ]
 
@@ -121,6 +128,9 @@ REQUIRED_PATTERNS = {
         "preprocessor_config.json",
         "model.safetensors|pytorch_model.bin",
     ],
+    "realesrgan": [
+        REALESRGAN_MODEL_FILENAME,
+    ],
 }
 
 
@@ -147,6 +157,9 @@ def is_cached_and_valid(model_cfg: dict) -> bool:
     repo_id = model_cfg["id"]
     m_type = model_cfg["type"]
     required = REQUIRED_PATTERNS.get(m_type, [])
+
+    if m_type == "realesrgan":
+        return os.path.exists(os.path.join(HF_HOME, "realesrgan", REALESRGAN_MODEL_FILENAME))
 
     snapshot_path = _get_snapshot_path_if_cached(repo_id)
     if not snapshot_path:
@@ -231,6 +244,15 @@ def preload_transformer(repo_id):
     logger.info(f"[transformer] ✓ Downloaded: {repo_id}")
 
 
+def preload_realesrgan(_repo_id):
+    target_dir = os.path.join(HF_HOME, "realesrgan")
+    os.makedirs(target_dir, exist_ok=True)
+    target_path = os.path.join(target_dir, REALESRGAN_MODEL_FILENAME)
+    logger.info(f"[realesrgan] Downloading official weight: {REALESRGAN_MODEL_FILENAME}")
+    urlretrieve(REALESRGAN_MODEL_URL, target_path)
+    logger.info(f"[realesrgan] ✓ Downloaded: {target_path}")
+
+
 # ---------------------------------------------------------------------------
 # Dispatch table
 # ---------------------------------------------------------------------------
@@ -242,6 +264,7 @@ PRELOAD_HANDLERS = {
     "flux":                  preload_flux,
     "vae":                   preload_vae,
     "transformer":           preload_transformer,
+    "realesrgan":            preload_realesrgan,
 }
 
 
@@ -266,9 +289,10 @@ def preload():
     logger.info("  sdxl-vae-fp16-fix       ~0.2 GB")
     logger.info("  Tiny-SD                 ~0.4 GB")
     logger.info("  Swin2SR upscaler        ~0.1 GB")
+    logger.info("  Real-ESRGAN x4plus      ~0.07 GB")
     logger.info("  Flux.1-schnell          ~34  GB  (bf16 safetensors only)")
     logger.info("  ─────────────────────────────────────────────────────")
-    logger.info("  Total                   ~43.7 GB")
+    logger.info("  Total                   ~43.8 GB")
     logger.info("")
     logger.info("NOTE: Strict cache verification is enabled.")
     logger.info("      Each repo is validated for required runtime files.")

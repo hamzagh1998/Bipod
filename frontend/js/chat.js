@@ -1,8 +1,13 @@
 import { state, dom } from "./state.js";
-import { apiFetch } from "./api.js";
+import { apiFetch, apiStream } from "./api.js";
 import { fetchConversations } from "./conversations.js";
 import { renderAttachmentPreviews } from "./attachments.js";
-import { appendMessage } from "./message-renderer.js";
+import {
+  appendMessage,
+  createStreamingAssistantMessage,
+  updateStreamingAssistantStatus,
+  updateStreamingAssistantText,
+} from "./message-renderer.js";
 import { showToast } from "./utils.js";
 
 function cloneAttachments(attachments = []) {
@@ -45,13 +50,57 @@ function setConversationPending(conversationId, isPending) {
 
 export function refreshComposerState() {
   const isPending = isConversationPending();
-  if (dom.loadingIndicator) {
-    dom.loadingIndicator.classList.toggle("hidden", !isPending);
-  }
+  if (dom.loadingIndicator) dom.loadingIndicator.classList.add("hidden");
   if (dom.userInput) dom.userInput.disabled = isPending;
   if (dom.sendBtn) dom.sendBtn.disabled = isPending;
   if (dom.attachBtn) dom.attachBtn.disabled = isPending;
   if (dom.chatForm) dom.chatForm.classList.toggle("is-pending", isPending);
+}
+
+function formatProgressStatus(event) {
+  const label = typeof event.label === "string" ? event.label.trim() : "";
+  const detail = typeof event.detail === "string" ? event.detail.trim() : "";
+  if (label && detail) return `${label}: ${detail}`;
+  return label || detail || "Working on the reply";
+}
+
+function getRevealChunkSize(fullTextLength, currentIndex) {
+  if (currentIndex < 120) return 1;
+  if (fullTextLength > 2400) return 10;
+  if (fullTextLength > 1600) return 8;
+  if (fullTextLength > 900) return 6;
+  if (fullTextLength > 500) return 4;
+  return 2;
+}
+
+async function revealAssistantResponse(
+  messageEl,
+  fullText,
+  conversationId,
+) {
+  let visibleLength = 0;
+
+  while (visibleLength < fullText.length) {
+    visibleLength = Math.min(
+      fullText.length,
+      visibleLength + getRevealChunkSize(fullText.length, visibleLength),
+    );
+
+    if (state.currentConversationId === conversationId) {
+      updateStreamingAssistantText(
+        messageEl,
+        fullText.slice(0, visibleLength),
+      );
+      if (dom.chatWindow) dom.chatWindow.scrollTop = dom.chatWindow.scrollHeight;
+    }
+
+    await new Promise((resolve) => window.requestAnimationFrame(resolve));
+  }
+
+  if (state.currentConversationId === conversationId) {
+    updateStreamingAssistantText(messageEl, fullText, { finalize: true });
+    if (dom.chatWindow) dom.chatWindow.scrollTop = dom.chatWindow.scrollHeight;
+  }
 }
 
 export function saveCurrentComposerDraft(
@@ -159,6 +208,10 @@ export async function sendMessage(text, options = {}) {
   setConversationPending(sentForId, true);
   refreshComposerState();
   if (dom.chatWindow) dom.chatWindow.scrollTop = dom.chatWindow.scrollHeight;
+  const liveAssistantMessage =
+    state.currentConversationId === sentForId
+      ? createStreamingAssistantMessage("Understanding your request")
+      : null;
 
   try {
     const payload = {
@@ -173,15 +226,46 @@ export async function sendMessage(text, options = {}) {
     };
     console.log("Payload:", payload); // DEBUG
 
-    const response = await apiFetch("/chat", {
+    const stream = await apiStream("/chat/stream", {
       method: "POST",
       body: JSON.stringify(payload),
     });
-    if (!response.ok) throw new Error("Network response was not ok");
-    const data = await response.json();
+    let finalResponse = "";
+    for await (const event of stream.events()) {
+      if (event.type === "response") {
+        finalResponse = event.text || "";
+        if (liveAssistantMessage && state.currentConversationId === sentForId) {
+          updateStreamingAssistantStatus(
+            liveAssistantMessage,
+            "Writing the reply",
+          );
+        }
+        await revealAssistantResponse(
+          liveAssistantMessage,
+          finalResponse,
+          sentForId,
+        );
+        continue;
+      }
 
-    if (state.currentConversationId === sentForId) {
-      appendMessage("ai", data.response);
+      if (event.type === "error") {
+        throw new Error(event.detail || "Streaming chat failed");
+      }
+
+      if (
+        liveAssistantMessage &&
+        state.currentConversationId === sentForId &&
+        event.type !== "done"
+      ) {
+        updateStreamingAssistantStatus(
+          liveAssistantMessage,
+          formatProgressStatus(event),
+        );
+      }
+    }
+
+    if (!finalResponse) {
+      throw new Error("No response was returned from the model");
     }
 
     const conv = state.conversations.find((c) => c.id === sentForId);
@@ -199,6 +283,7 @@ export async function sendMessage(text, options = {}) {
   } catch (error) {
     console.error("Chat error:", error);
     if (state.currentConversationId === sentForId) {
+      if (liveAssistantMessage) liveAssistantMessage.remove();
       appendMessage(
         "system",
         "⚠ Brain synchronization failed. Check connection.",

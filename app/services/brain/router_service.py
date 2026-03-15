@@ -174,6 +174,13 @@ class RouterService:
         )
 
     def _is_image_generation_request(self, normalized: str) -> bool:
+        malformed_imperative = re.match(
+            r"^(generate|create|make)\s+(?:an?\s+)?of\s+\S+",
+            normalized,
+        )
+        if malformed_imperative:
+            return True
+
         direct_patterns = (
             "generate an image",
             "generate image",

@@ -14,6 +14,7 @@ class User(Base):
     created_at: Mapped[datetime.datetime] = mapped_column(DateTime, server_default=func.now())
 
     conversations: Mapped[List["Conversation"]] = relationship(back_populates="user", cascade="all, delete-orphan")
+    studio_projects: Mapped[List["StudioProject"]] = relationship(back_populates="user", cascade="all, delete-orphan")
 
 class Conversation(Base):
     __tablename__ = "conversations"
@@ -39,3 +40,35 @@ class Message(Base):
     created_at: Mapped[datetime.datetime] = mapped_column(DateTime, server_default=func.now())
 
     conversation: Mapped["Conversation"] = relationship(back_populates="messages")
+
+
+class StudioProject(Base):
+    __tablename__ = "studio_projects"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    title: Mapped[str] = mapped_column(String, default="New Project")
+    created_at: Mapped[datetime.datetime] = mapped_column(DateTime, server_default=func.now())
+
+    user: Mapped["User"] = relationship(back_populates="studio_projects")
+    images: Mapped[List["StudioImage"]] = relationship(
+        back_populates="project",
+        cascade="all, delete-orphan",
+    )
+
+
+class StudioImage(Base):
+    __tablename__ = "studio_images"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    project_id: Mapped[str] = mapped_column(ForeignKey("studio_projects.id"), index=True)
+    filename: Mapped[str] = mapped_column(String)
+    relative_path: Mapped[str] = mapped_column(String, unique=True)
+    mime_type: Mapped[str] = mapped_column(String)
+    file_extension: Mapped[str] = mapped_column(String)
+    width: Mapped[Optional[int]] = mapped_column(nullable=True)
+    height: Mapped[Optional[int]] = mapped_column(nullable=True)
+    metadata_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime.datetime] = mapped_column(DateTime, server_default=func.now())
+
+    project: Mapped["StudioProject"] = relationship(back_populates="images")

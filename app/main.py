@@ -38,6 +38,7 @@ async def startup_event():
     logger.info(f"Bipod is waking up on hardware: {settings.HARDWARE_TARGET}")
     logger.info(f"Active Brain Model: {settings.ACTIVE_MODEL}")
     logger.info(f"Ollama URL: {settings.OLLAMA_BASE_URL}")
+    logger.info(f"Ollama num_ctx: {settings.OLLAMA_NUM_CTX}")
     logger.info(f"HARDWARE_TARGET: {settings.HARDWARE_TARGET}")
     if settings.USE_GPU:
         logger.info("Detected NVIDIA GPU - Using GPU-accelerated inference mode.")

@@ -11,3 +11,5 @@ huggingface_hub
 timm
 sentencepiece
 protobuf
+basicsr
+realesrgan

@@ -8,7 +8,7 @@ import base64
 import uuid
 import html
 import warnings
-from typing import List, Dict, Optional
+from typing import Any, Awaitable, Callable, Dict, List, Optional
 try:
     from ddgs import DDGS  # type: ignore
 except ImportError:
@@ -25,6 +25,8 @@ from app.services.vector_service import vector_service
 from app.services.file_service import file_service
 
 logger = get_logger("bipod.brain")
+
+ProgressCallback = Callable[[str, Dict[str, Any]], Awaitable[None]]
 
 class BrainService:
     """The central intelligence service of Bipod with tool-calling capabilities."""
@@ -105,6 +107,10 @@ class BrainService:
         (r"\bu\.s\.\b", "united states"),
         (r"\bamerica\b", "united states"),
     )
+
+    OLLAMA_CONNECT_TIMEOUT_SEC = 10.0
+    OLLAMA_WRITE_TIMEOUT_SEC = 30.0
+    OLLAMA_POOL_TIMEOUT_SEC = 30.0
     
     def __init__(self):
         self.base_url = settings.OLLAMA_BASE_URL
@@ -344,6 +350,20 @@ class BrainService:
             "temperature": settings.OLLAMA_TEMPERATURE,
             "repeat_penalty": settings.OLLAMA_REPEAT_PENALTY,
         }
+
+    def _ollama_request_timeout(self, include_tools: bool) -> httpx.Timeout:
+        """Use a longer read timeout for chat generation, especially with tool turns."""
+        read_timeout = (
+            float(settings.OLLAMA_TOOL_CHAT_TIMEOUT_SEC)
+            if include_tools
+            else float(settings.OLLAMA_CHAT_TIMEOUT_SEC)
+        )
+        return httpx.Timeout(
+            connect=self.OLLAMA_CONNECT_TIMEOUT_SEC,
+            read=read_timeout,
+            write=self.OLLAMA_WRITE_TIMEOUT_SEC,
+            pool=self.OLLAMA_POOL_TIMEOUT_SEC,
+        )
 
     def _is_image_generation_request(self, user_input: str) -> bool:
         """Detect explicit requests to create or transform visuals.
@@ -1207,7 +1227,8 @@ class BrainService:
         model_id: Optional[str] = None, 
         reasoning_mode: Optional[str] = None,
         imagine_model: Optional[str] = None,
-        attachments: Optional[List[dict]] = None
+        attachments: Optional[List[dict]] = None,
+        progress_callback: Optional[ProgressCallback] = None,
     ) -> str:
         """Processes user input, handles tool calls, and returns a response.
         
@@ -1215,10 +1236,22 @@ class BrainService:
         conversations are only used as very light background context, never as
         instructions to act upon.
         """
+        await self._emit_progress(
+            progress_callback,
+            "status",
+            label="Saving your message",
+            detail="Persisting the user turn before building context.",
+        )
         # 1. Save current user message to DB first so it's part of context
         user_msg = await memory_service.add_message(conversation_id, "user", user_input, attachments=attachments)
         
         # 2. Retrieve updated context
+        await self._emit_progress(
+            progress_callback,
+            "status",
+            label="Loading conversation context",
+            detail="Collecting the recent messages and memory state.",
+        )
         history = await memory_service.get_messages(conversation_id, user_id)
 
         # Determine reasoning instructions
@@ -1242,6 +1275,12 @@ class BrainService:
         current_system_prompt = self.system_prompt + time_context + mode_instruction
 
         # 3. Build bounded conversation context
+        await self._emit_progress(
+            progress_callback,
+            "status",
+            label="Preparing context",
+            detail="Compressing older turns and assembling the prompt.",
+        )
         context_bundle = await self.context_builder.build(
             history=history,
             user_input=user_input,
@@ -1267,12 +1306,30 @@ class BrainService:
             if any(v in lower_input for v in vision_trigger):
                 target_model = settings.VISION_MODEL
                 logger.info("Vision task detected — switching brain to specialized eyes.")
+                await self._emit_progress(
+                    progress_callback,
+                    "status",
+                    label="Switching to the vision model",
+                    detail="The request looks like image analysis rather than plain chat.",
+                )
 
         if self._is_model_status_query(user_input):
+            await self._emit_progress(
+                progress_callback,
+                "status",
+                label="Checking active models",
+                detail="Returning the currently selected chat and image models.",
+            )
             ai_message = self._build_model_status_response(
                 configured_model=configured_model,
                 effective_model=target_model,
                 imagine_model=active_imagine_model,
+            )
+            await self._emit_progress(
+                progress_callback,
+                "status",
+                label="Saving the reply",
+                detail="Persisting the assistant response.",
             )
             await self._store_assistant_turn(conversation_id, user_id, user_msg.id, user_input, ai_message)
             return ai_message
@@ -1305,6 +1362,12 @@ class BrainService:
         messages = [{"role": "system", "content": current_system_prompt}] + context_bundle.recent_messages
 
         # 5. Request routing
+        await self._emit_progress(
+            progress_callback,
+            "status",
+            label="Routing the request",
+            detail="Deciding between direct chat, tools, and handoffs.",
+        )
         routing_decision = await self.router.route(user_input)
         intent = routing_decision.intent
         filtered_tools = self.router.filter_tools(self.tools, routing_decision)
@@ -1328,17 +1391,34 @@ class BrainService:
 
 
         try:
-            # Use longer timeout when tools are enabled (file searches can be slow)
-            request_timeout = 120.0 if include_tools else 60.0
+            request_timeout = self._ollama_request_timeout(include_tools)
+            logger.info(
+                "Starting Ollama chat request with read timeout %.1fs (tools=%s, model=%s)",
+                request_timeout.read,
+                include_tools,
+                target_model,
+            )
             async with httpx.AsyncClient(timeout=request_timeout) as client:
                 if file_handoff_path:
                     logger.info(f"Using local file handoff for explicit path request: {file_handoff_path}")
+                    await self._emit_progress(
+                        progress_callback,
+                        "status",
+                        label="Reading the requested file",
+                        detail=file_handoff_path,
+                    )
                     ai_message = await self._complete_with_file_read(
                         client=client,
                         target_model=target_model,
                         messages=messages,
                         user_input=user_input,
                         file_path=file_handoff_path,
+                    )
+                    await self._emit_progress(
+                        progress_callback,
+                        "status",
+                        label="Saving the reply",
+                        detail="Persisting the assistant response.",
                     )
                     await self._store_assistant_turn(conversation_id, user_id, user_msg.id, user_input, ai_message)
                     return ai_message
@@ -1354,7 +1434,25 @@ class BrainService:
                     imagine_model=imagine_model,
                     configured_model=configured_model,
                     active_imagine_model=active_imagine_model,
+                    progress_callback=progress_callback,
                 )
+
+                if intent == "image_generation":
+                    ai_message = await self._resolve_image_generation_response(
+                        orchestration=orchestration,
+                        user_input=user_input,
+                        imagine_model=active_imagine_model,
+                        current_image_paths=context_bundle.current_image_paths,
+                        progress_callback=progress_callback,
+                    )
+                    await self._emit_progress(
+                        progress_callback,
+                        "status",
+                        label="Saving the reply",
+                        detail="Persisting the assistant response.",
+                    )
+                    await self._store_assistant_turn(conversation_id, user_id, user_msg.id, user_input, ai_message)
+                    return ai_message
 
                 final_answer = orchestration.final_answer
                 search_handoff_query = self._extract_explicit_web_search_signal(final_answer, user_input)
@@ -1365,6 +1463,12 @@ class BrainService:
                     search_handoff_query = self._extract_web_search_signal(final_answer, user_input)
                 if search_handoff_query:
                     logger.info(f"Model requested middleware web search handoff for query: {search_handoff_query}")
+                    await self._emit_progress(
+                        progress_callback,
+                        "status",
+                        label="Searching for current information",
+                        detail=search_handoff_query,
+                    )
                     final_answer = await self._complete_with_web_search(
                         client=client,
                         target_model=target_model,
@@ -1373,12 +1477,46 @@ class BrainService:
                         search_query=search_handoff_query,
                     )
 
+                await self._emit_progress(
+                    progress_callback,
+                    "status",
+                    label="Composing the final answer",
+                    detail="Cleaning up tool output and assembling the reply.",
+                )
                 ai_message = answer_composer.compose(final_answer, orchestration)
 
                 # Store AI message to DB
+                await self._emit_progress(
+                    progress_callback,
+                    "status",
+                    label="Saving the reply",
+                    detail="Persisting the assistant response.",
+                )
                 await self._store_assistant_turn(conversation_id, user_id, user_msg.id, user_input, ai_message)
                 return ai_message
 
+        except httpx.ReadTimeout:
+            read_timeout = (
+                settings.OLLAMA_TOOL_CHAT_TIMEOUT_SEC
+                if include_tools
+                else settings.OLLAMA_CHAT_TIMEOUT_SEC
+            )
+            logger.error(
+                "Brain failure: Ollama timed out after %ss while handling model '%s' (tools=%s).",
+                read_timeout,
+                target_model,
+                include_tools,
+            )
+            return (
+                f"My thoughts are currently fragmented: the local model backend did not respond within {read_timeout} seconds. "
+                "This usually means the model is still warming up, overloaded, or taking too long to produce the first token."
+            )
+        except httpx.RequestError as e:
+            logger.error(f"Brain failure (Request Error): {type(e).__name__}: {e}")
+            return (
+                "My thoughts are currently fragmented: I could not reach the local model backend. "
+                "Please check whether Ollama is still running and healthy."
+            )
         except httpx.HTTPStatusError as e:
             response = e.response
             if response.status_code == 404:
@@ -1386,8 +1524,48 @@ class BrainService:
             logger.error(f"Brain failure (HTTP Status Error): {e}")
             return f"My thoughts are currently fragmented: local model backend returned HTTP {response.status_code} {response.reason_phrase}."
         except Exception as e:
-            logger.error(f"Brain failure: {e}")
+            logger.error(f"Brain failure ({type(e).__name__}): {e}")
             return f"My thoughts are currently fragmented: {str(e)}"
+
+    async def _emit_progress(
+        self,
+        progress_callback: Optional[ProgressCallback],
+        event: str,
+        **payload: Any,
+    ) -> None:
+        if progress_callback is None:
+            return
+        await progress_callback(event, payload)
+
+    async def _resolve_image_generation_response(
+        self,
+        orchestration,
+        user_input: str,
+        imagine_model: str,
+        current_image_paths: List[str],
+        progress_callback: Optional[ProgressCallback] = None,
+    ) -> str:
+        if orchestration.image_generation_result:
+            logger.info("Using direct generate_image tool result for the final image reply.")
+            return orchestration.image_generation_result.strip()
+
+        logger.warning(
+            "Image generation request completed without executing generate_image; enforcing direct imagine call."
+        )
+        await self._emit_progress(
+            progress_callback,
+            "tool_call",
+            label="Generating an image",
+            detail="The model skipped the image tool, so Bipod is invoking the imagine service directly.",
+            tool_name="generate_image",
+        )
+        image_path = current_image_paths[0] if current_image_paths else None
+        result = await self._generate_image_request(
+            user_input,
+            imagine_model,
+            image_path=image_path,
+        )
+        return result.strip()
 
     async def clear_memory(self, conversation_id: str):
         await memory_service.clear_conversation(conversation_id)
@@ -1554,6 +1732,57 @@ class BrainService:
                 "Failed to generate image because the local image service is unavailable or still starting. "
                 "If this is the first run, it may still be downloading model weights."
             )
+
+    async def improve_studio_prompts(
+        self,
+        prompt: str,
+        negative_prompt: str = "",
+        model_type: Optional[str] = None,
+    ) -> dict[str, str]:
+        system_prompt = (
+            "You improve prompts for local image generation UIs.\n"
+            "Return only valid JSON with keys 'prompt' and 'negative_prompt'.\n"
+            "Preserve the user's core subject and intent.\n"
+            "Make the positive prompt clearer, denser, and better structured for image generation.\n"
+            "Make the negative prompt concise and practical, focused on artifact prevention.\n"
+            "Do not add explanations, markdown, or code fences.\n"
+            "Do not make the prompts excessively long."
+        )
+
+        user_prompt = (
+            f"Model type: {model_type or 'unspecified'}\n"
+            f"Current prompt: {prompt}\n"
+            f"Current negative prompt: {negative_prompt or '(empty)'}"
+        )
+
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                f"{self.base_url}/api/chat",
+                json={
+                    "model": settings.ACTIVE_MODEL,
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                    "stream": False,
+                    "options": self._ollama_options(),
+                },
+            )
+            response.raise_for_status()
+
+        content = response.json().get("message", {}).get("content", "").strip()
+        try:
+            parsed = json.loads(content)
+        except json.JSONDecodeError:
+            match = re.search(r"\{.*\}", content, re.DOTALL)
+            parsed = json.loads(match.group(0)) if match else {}
+
+        improved_prompt = str(parsed.get("prompt") or prompt).strip()
+        improved_negative = str(parsed.get("negative_prompt") or negative_prompt or "").strip()
+        return {
+            "prompt": improved_prompt,
+            "negative_prompt": improved_negative,
+        }
 
     async def _map_reduce_summarize(self, text: str) -> str:
         """Summarizes large text chunks using a Map-Reduce approach."""

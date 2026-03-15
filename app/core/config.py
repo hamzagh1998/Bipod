@@ -3,7 +3,7 @@ import logging
 import platform
 import subprocess
 from typing import Literal
-from pydantic import Field, computed_field
+from pydantic import Field, computed_field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 logger = logging.getLogger("bipod.config")
@@ -25,14 +25,22 @@ def detect_gpu_presence() -> bool:
         return False
 
 def detect_gpu_vram() -> float:
-    """Returns total VRAM in GB if GPU exists, else 0.0."""
+    """Returns the largest visible GPU VRAM in GB, else 0.0."""
     try:
         result = subprocess.run(
             ["nvidia-smi", "--query-gpu=memory.total", "--format=csv,noheader,nounits"],
             check=True, capture_output=True, text=True
         )
-        return float(result.stdout.strip()) / 1024.0
-    except:
+        memory_values_mb = [
+            float(line.strip())
+            for line in result.stdout.splitlines()
+            if line.strip()
+        ]
+        if not memory_values_mb:
+            return 0.0
+        # Use the largest visible GPU to avoid overestimating context on mixed hardware.
+        return max(memory_values_mb) / 1024.0
+    except Exception:
         return 0.0
 
 def detect_gpu_name() -> str:
@@ -45,6 +53,26 @@ def detect_gpu_name() -> str:
         return result.stdout.strip()
     except:
         return "CPU Mode"
+
+
+def recommend_ollama_num_ctx(
+    *,
+    use_gpu: bool,
+    gpu_vram_gb: float,
+    hardware_target: Literal["amd64", "arm64"],
+) -> int:
+    """Choose a safe Ollama context window based on available GPU VRAM."""
+    if not use_gpu:
+        return 2048 if hardware_target == "arm64" else 4096
+    if gpu_vram_gb < 6.0:
+        return 4096
+    if gpu_vram_gb < 10.0:
+        return 8192
+    if gpu_vram_gb < 18.0:
+        return 16384
+    if gpu_vram_gb < 26.0:
+        return 24576
+    return 32768
 
 
 class Settings(BaseSettings):
@@ -62,7 +90,7 @@ class Settings(BaseSettings):
     HARDWARE_TARGET: Literal["amd64", "arm64"] = Field(default_factory=detect_hardware_arch)
     USE_GPU: bool = Field(default_factory=detect_gpu_presence)
     GPU_NAME: str = Field(default_factory=detect_gpu_name)
-    GPU_VRAM: float = Field(default_factory=detect_gpu_vram) # Total VRAM in GB
+    GPU_VRAM: float = Field(default_factory=detect_gpu_vram) # Largest visible GPU VRAM in GB
     
     # --- Storage Paths ---
     # Use /app/data if inside container, else local ./data
@@ -138,9 +166,11 @@ class Settings(BaseSettings):
     EMBEDDING_MODEL: str = "nomic-embed-text" # Local vector embeddings
 
     # Ollama runtime tuning
-    OLLAMA_NUM_CTX: int = 4096
+    OLLAMA_NUM_CTX: int | None = None
     OLLAMA_TEMPERATURE: float = 0.3
     OLLAMA_REPEAT_PENALTY: float = 1.1
+    OLLAMA_CHAT_TIMEOUT_SEC: int = 180
+    OLLAMA_TOOL_CHAT_TIMEOUT_SEC: int = 240
     RECENT_HISTORY_MESSAGES: int = 10
     HISTORY_SUMMARY_TRIGGER: int = 14
     HISTORY_SUMMARY_CHAR_LIMIT: int = 12000
@@ -150,6 +180,16 @@ class Settings(BaseSettings):
     MAX_MEMORY_ITEMS: int = 3
     MAX_ATTACHMENT_TEXT_CHARS: int = 12000
     BRAIN_ENABLE_ACTION_HANDOFF: bool = True
+
+    @model_validator(mode="after")
+    def apply_dynamic_runtime_defaults(self) -> "Settings":
+        if self.OLLAMA_NUM_CTX is None:
+            self.OLLAMA_NUM_CTX = recommend_ollama_num_ctx(
+                use_gpu=self.USE_GPU,
+                gpu_vram_gb=self.GPU_VRAM,
+                hardware_target=self.HARDWARE_TARGET,
+            )
+        return self
 
     # Imagine tiers
     IMAGINE_FLUX_MODEL: str = "flux-schnell"     # Photoreal Quality

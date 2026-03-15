@@ -51,6 +51,74 @@ function isSafeUrl(url, { allowDataImage = false } = {}) {
   );
 }
 
+function renderAiMessageMarkup(msgDiv, contentDiv, text) {
+  const finalText = text || "";
+
+  msgDiv.dataset.rawContent = finalText;
+  if (typeof marked !== "undefined") {
+    contentDiv.innerHTML = marked.parse(escapeHtml(finalText));
+  } else {
+    contentDiv.innerText = finalText;
+  }
+
+  contentDiv.querySelectorAll("a").forEach((a) => {
+    const href = a.getAttribute("href") || "";
+    if (!isSafeUrl(href)) {
+      a.removeAttribute("href");
+    } else if (href.startsWith("http://") || href.startsWith("https://")) {
+      a.setAttribute("rel", "noopener noreferrer nofollow");
+      a.setAttribute("target", "_blank");
+    }
+  });
+
+  contentDiv.querySelectorAll("img").forEach((img) => {
+    const src = img.getAttribute("src") || "";
+    if (!isSafeUrl(src, { allowDataImage: true })) {
+      img.remove();
+    }
+  });
+
+  wrapCodeBlocks(contentDiv);
+  contentDiv.querySelectorAll("pre code").forEach((block) => {
+    if (typeof hljs !== "undefined") hljs.highlightElement(block);
+  });
+
+  contentDiv.querySelectorAll("img").forEach((img) => {
+    img.style.cursor = "zoom-in";
+    img.onclick = () => {
+      if (dom.lightboxImg) {
+        dom.lightboxImg.src = img.src;
+        dom.lightbox.classList.add("active");
+      }
+    };
+  });
+
+  const actionsDiv = document.createElement("div");
+  actionsDiv.className = "msg-actions";
+
+  const copyBtn = document.createElement("button");
+  copyBtn.className = "msg-action-btn";
+  copyBtn.innerHTML =
+    '<span class="material-symbols-rounded">content_copy</span> Copy';
+  copyBtn.onclick = () => {
+    copyToClipboard(finalText);
+  };
+  actionsDiv.appendChild(copyBtn);
+  contentDiv.appendChild(actionsDiv);
+}
+
+function renderStreamingText(textContainer, text) {
+  const safeText = escapeHtml(text || "").replace(/\n/g, "<br>");
+  textContainer.innerHTML = `<p>${safeText}<span class="message-stream-cursor" aria-hidden="true"></span></p>`;
+}
+
+function insertMessageElement(msgDiv, shouldScroll) {
+  if (dom.chatWindow) {
+    dom.chatWindow.insertBefore(msgDiv, dom.loadingIndicator);
+    if (shouldScroll) dom.chatWindow.scrollTop = dom.chatWindow.scrollHeight;
+  }
+}
+
 export function appendMessage(role, text, shouldScroll = true, options = {}) {
   const { attachments = [], messageId = null } = options;
   const hero = document.getElementById("welcome-hero");
@@ -66,68 +134,7 @@ export function appendMessage(role, text, shouldScroll = true, options = {}) {
   contentDiv.className = "message-content";
 
   if (role === "ai") {
-    const imgMatch = text.match(
-      /[sS]aved to:?\s+[`']?.*?\/generated\/([a-zA-Z0-9_-]+\.jpg)[`']?/i,
-    );
-    if (imgMatch) {
-      const filename = imgMatch[1];
-      if (!text.includes(`(/generated/${filename})`)) {
-        text += `\n\n![Generated Image](/generated/${filename})`;
-      }
-    }
-
-    msgDiv.dataset.rawContent = text;
-    // Safety check for marked
-    if (typeof marked !== "undefined") {
-      contentDiv.innerHTML = marked.parse(escapeHtml(text));
-    } else {
-      contentDiv.innerText = text;
-    }
-
-    contentDiv.querySelectorAll("a").forEach((a) => {
-      const href = a.getAttribute("href") || "";
-      if (!isSafeUrl(href)) {
-        a.removeAttribute("href");
-      } else if (href.startsWith("http://") || href.startsWith("https://")) {
-        a.setAttribute("rel", "noopener noreferrer nofollow");
-        a.setAttribute("target", "_blank");
-      }
-    });
-
-    contentDiv.querySelectorAll("img").forEach((img) => {
-      const src = img.getAttribute("src") || "";
-      if (!isSafeUrl(src, { allowDataImage: true })) {
-        img.remove();
-      }
-    });
-
-    wrapCodeBlocks(contentDiv);
-    contentDiv.querySelectorAll("pre code").forEach((block) => {
-      if (typeof hljs !== "undefined") hljs.highlightElement(block);
-    });
-
-    contentDiv.querySelectorAll("img").forEach((img) => {
-      img.style.cursor = "zoom-in";
-      img.onclick = () => {
-        if (dom.lightboxImg) {
-          dom.lightboxImg.src = img.src;
-          dom.lightbox.classList.add("active");
-        }
-      };
-    });
-
-    const actionsDiv = document.createElement("div");
-    actionsDiv.className = "msg-actions";
-
-    const copyBtn = document.createElement("button");
-    copyBtn.className = "msg-action-btn";
-    copyBtn.innerHTML =
-      '<span class="material-symbols-rounded">content_copy</span> Copy';
-    copyBtn.onclick = () => {
-      copyToClipboard(text);
-    };
-    actionsDiv.appendChild(copyBtn);
-    contentDiv.appendChild(actionsDiv);
+    renderAiMessageMarkup(msgDiv, contentDiv, text);
   } else if (role === "system") {
     contentDiv.innerText = text;
   } else {
@@ -168,8 +175,64 @@ export function appendMessage(role, text, shouldScroll = true, options = {}) {
   }
 
   msgDiv.appendChild(contentDiv);
-  if (dom.chatWindow) {
-    dom.chatWindow.insertBefore(msgDiv, dom.loadingIndicator);
-    if (shouldScroll) dom.chatWindow.scrollTop = dom.chatWindow.scrollHeight;
+  insertMessageElement(msgDiv, shouldScroll);
+}
+
+export function createStreamingAssistantMessage(
+  initialStatus = "Thinking through the request",
+  shouldScroll = true,
+) {
+  const hero = document.getElementById("welcome-hero");
+  if (hero) hero.remove();
+
+  const msgDiv = document.createElement("div");
+  msgDiv.className = "message ai is-streaming";
+
+  const contentDiv = document.createElement("div");
+  contentDiv.className = "message-content";
+
+  const statusDiv = document.createElement("div");
+  statusDiv.className = "message-status";
+  statusDiv.textContent = initialStatus;
+
+  const liveTextDiv = document.createElement("div");
+  liveTextDiv.className = "message-live-text";
+  renderStreamingText(liveTextDiv, "");
+
+  contentDiv.appendChild(statusDiv);
+  contentDiv.appendChild(liveTextDiv);
+  msgDiv.appendChild(contentDiv);
+  insertMessageElement(msgDiv, shouldScroll);
+
+  return msgDiv;
+}
+
+export function updateStreamingAssistantStatus(messageEl, status) {
+  const statusDiv = messageEl?.querySelector(".message-status");
+  if (!statusDiv) return;
+  statusDiv.textContent = status || "";
+  statusDiv.classList.toggle("hidden", !status);
+}
+
+export function updateStreamingAssistantText(
+  messageEl,
+  text,
+  options = {},
+) {
+  const { finalize = false } = options;
+  if (!messageEl) return;
+
+  if (!finalize) {
+    const liveTextDiv = messageEl.querySelector(".message-live-text");
+    if (!liveTextDiv) return;
+    messageEl.dataset.rawContent = text || "";
+    renderStreamingText(liveTextDiv, text);
+    return;
   }
+
+  const contentDiv = messageEl.querySelector(".message-content");
+  if (!contentDiv) return;
+  contentDiv.innerHTML = "";
+  messageEl.classList.remove("is-streaming");
+  renderAiMessageMarkup(messageEl, contentDiv, text);
 }

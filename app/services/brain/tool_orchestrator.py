@@ -5,7 +5,7 @@ import os
 import platform
 import re
 import subprocess
-from typing import Awaitable, Callable, Dict, List, Optional
+from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 import httpx
 
@@ -15,6 +15,8 @@ from app.services.brain.contracts import OrchestrationResult
 from app.services.file_service import file_service
 
 logger = get_logger("bipod.services.brain.tools")
+
+ProgressCallback = Callable[[str, Dict[str, Any]], Awaitable[None]]
 
 
 class ToolOrchestrator:
@@ -57,7 +59,14 @@ class ToolOrchestrator:
         imagine_model: Optional[str],
         configured_model: str,
         active_imagine_model: str,
+        progress_callback: Optional[ProgressCallback] = None,
     ) -> OrchestrationResult:
+        await self._emit_progress(
+            progress_callback,
+            "model_request",
+            label=f"Querying {target_model}",
+            detail="Starting the first model pass.",
+        )
         payload = {
             "model": target_model,
             "messages": messages,
@@ -75,6 +84,7 @@ class ToolOrchestrator:
         turn = 0
         executed_tool_calls_hash = set()
         executed_tools: List[str] = []
+        image_generation_result = ""
         allowed_tool_names = {t["function"]["name"] for t in filtered_tools} if include_tools else set()
 
         while turn < max_turns:
@@ -112,6 +122,13 @@ class ToolOrchestrator:
 
             turn += 1
             logger.info(f"Processing tool turn {turn}/{max_turns}...")
+            await self._emit_progress(
+                progress_callback,
+                "tool_turn",
+                label=f"Running tool step {turn}",
+                detail="The model requested external tools before answering.",
+                turn=turn,
+            )
 
             if "tool_calls" not in message:
                 message["tool_calls"] = tool_calls
@@ -131,6 +148,14 @@ class ToolOrchestrator:
 
             for tool_call in filtered_tool_calls:
                 executed_tools.append(tool_call["function"]["name"])
+                tool_name = tool_call["function"]["name"]
+                await self._emit_progress(
+                    progress_callback,
+                    "tool_call",
+                    label=self._tool_status_label(tool_name),
+                    detail=self._tool_status_detail(tool_name, tool_call["function"].get("arguments")),
+                    tool_name=tool_name,
+                )
                 result = await self._execute_tool_call(
                     tool_call=tool_call,
                     imagine_model=imagine_model,
@@ -138,6 +163,8 @@ class ToolOrchestrator:
                     target_model=target_model,
                     active_imagine_model=active_imagine_model,
                 )
+                if tool_name == "generate_image":
+                    image_generation_result = result
                 messages.append({
                     "role": "tool",
                     "content": result,
@@ -153,6 +180,12 @@ class ToolOrchestrator:
             if include_tools:
                 json_payload["tools"] = filtered_tools
 
+            await self._emit_progress(
+                progress_callback,
+                "model_request",
+                label=f"Reasoning over tool results with {target_model}",
+                detail="Feeding tool output back to the model.",
+            )
             resp = await client.post(f"{self.base_url}/api/chat", json=json_payload)
             resp.raise_for_status()
             message = resp.json().get("message", {})
@@ -175,7 +208,55 @@ class ToolOrchestrator:
             tool_results_summary=tool_results_summary,
             generated_images=generated_images,
             executed_tools=executed_tools,
+            image_generation_result=image_generation_result,
         )
+
+    async def _emit_progress(
+        self,
+        progress_callback: Optional[ProgressCallback],
+        event: str,
+        **payload: Any,
+    ) -> None:
+        if progress_callback is None:
+            return
+        await progress_callback(event, payload)
+
+    def _tool_status_label(self, tool_name: str) -> str:
+        labels = {
+            "search_files": "Scanning files",
+            "read_file": "Reading a file",
+            "save_file": "Saving a file",
+            "analyze_image_file": "Inspecting an image",
+            "generate_image": "Generating an image",
+            "move_file": "Moving files",
+            "delete_file": "Deleting files",
+            "organize_files": "Organizing files",
+            "get_system_info": "Checking system info",
+            "web_search": "Searching the web",
+            "fetch_web_page": "Reading a web page",
+        }
+        return labels.get(tool_name, f"Running {tool_name}")
+
+    def _tool_status_detail(self, tool_name: str, args: Optional[Dict[str, Any]]) -> str:
+        if not isinstance(args, dict):
+            return "Working on the requested task."
+
+        if tool_name == "web_search":
+            query = str(args.get("query", "")).strip()
+            return f"Looking up: {query}" if query else "Looking up current information."
+        if tool_name == "fetch_web_page":
+            url = str(args.get("url", "")).strip()
+            return f"Fetching: {url}" if url else "Fetching the requested page."
+        if tool_name == "read_file":
+            path = str(args.get("path", "")).strip()
+            return f"Opening: {path}" if path else "Opening the requested file."
+        if tool_name == "search_files":
+            pattern = str(args.get("pattern", "")).strip()
+            return f"Pattern: {pattern}" if pattern else "Scanning the requested location."
+        if tool_name == "generate_image":
+            return "Rendering the image request."
+
+        return "Working on the requested task."
 
     async def _execute_tool_call(
         self,

@@ -62,3 +62,38 @@ class ConversationUpdate(BaseModel):
 
 class ArchiveUnlock(BaseModel):
     password: str
+
+
+class StudioProjectCreate(BaseModel):
+    title: str
+
+
+class StudioProjectResponse(BaseModel):
+    id: str
+    title: str
+    created_at: datetime
+    image_count: int = 0
+    cover_image_url: Optional[str] = None
+
+
+class StudioImageResponse(BaseModel):
+    id: str
+    project_id: str
+    filename: str
+    url: str
+    mime_type: str
+    file_extension: str
+    width: Optional[int] = None
+    height: Optional[int] = None
+    created_at: datetime
+
+
+class StudioPromptImproveRequest(BaseModel):
+    prompt: str
+    negative_prompt: Optional[str] = ""
+    model_type: Optional[str] = None
+
+
+class StudioPromptImproveResponse(BaseModel):
+    prompt: str
+    negative_prompt: str
