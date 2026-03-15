@@ -1,5 +1,39 @@
 import { state, dom } from "./state.js";
-import { wrapCodeBlocks, escapeHtml } from "./utils.js";
+import {
+  wrapCodeBlocks,
+  escapeHtml,
+  copyToClipboard,
+  showToast,
+} from "./utils.js";
+
+let userMessageActionHandler = null;
+
+export function setUserMessageActionHandler(handler) {
+  userMessageActionHandler = handler;
+}
+
+function renderAttachments(container, attachments = []) {
+  if (!attachments || attachments.length === 0) return;
+
+  const attachmentsDiv = document.createElement("div");
+  attachmentsDiv.className = "message-attachments";
+
+  attachments.forEach((att) => {
+    if (att.type === "image") {
+      const img = document.createElement("img");
+      img.src = `data:image/jpeg;base64,${att.content}`;
+      img.className = "msg-attachment-img";
+      attachmentsDiv.appendChild(img);
+    } else {
+      const pdfIcon = document.createElement("div");
+      pdfIcon.className = "msg-attachment-pdf";
+      pdfIcon.innerHTML = `<span class="material-symbols-rounded">description</span><span>${escapeHtml(att.name || "PDF")}</span>`;
+      attachmentsDiv.appendChild(pdfIcon);
+    }
+  });
+
+  container.appendChild(attachmentsDiv);
+}
 
 function isSafeUrl(url, { allowDataImage = false } = {}) {
   if (!url) return false;
@@ -17,12 +51,16 @@ function isSafeUrl(url, { allowDataImage = false } = {}) {
   );
 }
 
-export function appendMessage(role, text, shouldScroll = true) {
+export function appendMessage(role, text, shouldScroll = true, options = {}) {
+  const { attachments = [], messageId = null } = options;
   const hero = document.getElementById("welcome-hero");
   if (hero) hero.remove();
 
   const msgDiv = document.createElement("div");
   msgDiv.className = `message ${role}`;
+  if (messageId !== null && messageId !== undefined) {
+    msgDiv.dataset.messageId = String(messageId);
+  }
 
   const contentDiv = document.createElement("div");
   contentDiv.className = "message-content";
@@ -86,7 +124,7 @@ export function appendMessage(role, text, shouldScroll = true) {
     copyBtn.innerHTML =
       '<span class="material-symbols-rounded">content_copy</span> Copy';
     copyBtn.onclick = () => {
-      navigator.clipboard.writeText(text);
+      copyToClipboard(text);
     };
     actionsDiv.appendChild(copyBtn);
     contentDiv.appendChild(actionsDiv);
@@ -95,25 +133,38 @@ export function appendMessage(role, text, shouldScroll = true) {
   } else {
     msgDiv.dataset.rawContent = text;
     contentDiv.innerHTML = `<p>${escapeHtml(text).replace(/\n/g, "<br>")}</p>`;
+    renderAttachments(contentDiv, attachments);
 
-    if (state.currentAttachments && state.currentAttachments.length > 0) {
-      const attachmentsDiv = document.createElement("div");
-      attachmentsDiv.className = "message-attachments";
-      state.currentAttachments.forEach((att) => {
-        if (att.type === "image") {
-          const img = document.createElement("img");
-          img.src = `data:image/jpeg;base64,${att.content}`;
-          img.className = "msg-attachment-img";
-          attachmentsDiv.appendChild(img);
-        } else {
-          const pdfIcon = document.createElement("div");
-          pdfIcon.className = "msg-attachment-pdf";
-          pdfIcon.innerHTML = `<span class="material-symbols-rounded">description</span><span>${escapeHtml(att.name || "PDF")}</span>`;
-          attachmentsDiv.appendChild(pdfIcon);
-        }
-      });
-      contentDiv.appendChild(attachmentsDiv);
-    }
+    const actionsDiv = document.createElement("div");
+    actionsDiv.className = "msg-actions user-msg-actions";
+
+    const editBtn = document.createElement("button");
+    editBtn.className = "msg-action-btn";
+    editBtn.innerHTML =
+      '<span class="material-symbols-rounded">edit</span> Edit';
+    editBtn.onclick = () => {
+      if (!userMessageActionHandler) {
+        showToast("Message actions are unavailable right now.");
+        return;
+      }
+      userMessageActionHandler("edit", { text, attachments, messageId });
+    };
+    actionsDiv.appendChild(editBtn);
+
+    const resendBtn = document.createElement("button");
+    resendBtn.className = "msg-action-btn";
+    resendBtn.innerHTML =
+      '<span class="material-symbols-rounded">refresh</span> Resend';
+    resendBtn.onclick = () => {
+      if (!userMessageActionHandler) {
+        showToast("Message actions are unavailable right now.");
+        return;
+      }
+      userMessageActionHandler("resend", { text, attachments, messageId });
+    };
+    actionsDiv.appendChild(resendBtn);
+
+    contentDiv.appendChild(actionsDiv);
   }
 
   msgDiv.appendChild(contentDiv);

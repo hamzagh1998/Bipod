@@ -1,7 +1,10 @@
 import { state, dom } from "./state.js";
 import { apiFetch } from "./api.js";
 import { showToast } from "./utils.js";
-import { fetchConversations, renderConversations } from "./conversations.js";
+import {
+  fetchConversations,
+  renderConversations,
+} from "./conversations.js";
 
 export async function checkAuthStatus() {
   if (!state.authToken) {
@@ -17,7 +20,7 @@ export async function checkAuthStatus() {
         dom.currentUsernameSpan.innerText = state.currentUser.username;
       }
       hideAuth();
-      await fetchConversations();
+      await fetchConversations({ restoreSelection: true });
     } else {
       handleLogout();
     }
@@ -44,14 +47,25 @@ export function hideAuth() {
 
 export function handleLogout() {
   localStorage.removeItem("bipod_token");
+  localStorage.removeItem("bipod_current_conversation");
   state.authToken = null;
   state.currentUser = null;
   state.currentConversationId = null;
   state.conversations = [];
+  state.currentAttachments = [];
+  state.conversationDrafts = {};
+  state.pendingConversationIds = {};
   renderConversations();
   if (dom.chatWindow) {
+    const indicator = dom.loadingIndicator;
+    if (indicator?.parentElement) {
+      indicator.parentElement.removeChild(indicator);
+    }
     dom.chatWindow.innerHTML = "";
-    dom.chatWindow.appendChild(dom.loadingIndicator);
+    if (indicator) {
+      indicator.classList.add("hidden");
+      dom.chatWindow.appendChild(indicator);
+    }
   }
   showAuth();
 }

@@ -40,7 +40,7 @@ async def startup_event():
     logger.info(f"Ollama URL: {settings.OLLAMA_BASE_URL}")
     logger.info(f"HARDWARE_TARGET: {settings.HARDWARE_TARGET}")
     if settings.USE_GPU:
-        logger.info("Detected NVIDIA GPU - Using Heavy Inference mode.")
+        logger.info("Detected NVIDIA GPU - Using GPU-accelerated inference mode.")
     else:
         logger.warning("No GPU detected - Running in CPU/Efficient mode.")
     
@@ -86,4 +86,3 @@ app.include_router(api_router, prefix="/api/v1")
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("app.main:app", host="0.0.0.0", port=4444, reload=True)
-

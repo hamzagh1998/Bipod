@@ -93,16 +93,16 @@ Bipod uses a **Sidecar Pattern**, separating the Inference Server (Ollama) from 
 
 ## 🧠 Required Models
 
-Bipod uses different models based on the selected tier and capabilities. You must pull these models into the Ollama container for them to work.
+Bipod uses different Ollama models for each brain tier. Pull the models below into the `bipod_ollama` container before using those tiers.
 
-Run the following command to install the recommended brain and utility models:
+Run these commands to install the supported brain and utility models:
 
 ```bash
-# Recommended Brain (Higher intelligence & reliable tools)
+# Smart Tier (Higher intelligence & reliable tools)
 docker exec -it bipod_ollama ollama pull qwen2.5:7b
 
-# Alternative Heavy Brain (General baseline)
-docker exec -it bipod_ollama ollama pull llama3.1:8b
+# Heavy Tier (Creative baseline / default GPU-heavy option)
+docker exec -it bipod_ollama ollama pull qwen3:8b
 
 # Medium Tier (Standard CPU)
 docker exec -it bipod_ollama ollama pull llama3.2:3b

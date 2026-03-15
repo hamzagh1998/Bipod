@@ -1,7 +1,7 @@
 import { state, dom } from "./state.js";
 import { setupMarkdown } from "./utils.js";
 import { checkAuthStatus } from "./auth.js";
-import { switchConversation } from "./conversations.js";
+import { restoreConversationSelection } from "./conversations.js";
 import { setupEventListeners } from "./ui.js";
 
 // Global error handling for easier debugging
@@ -54,16 +54,24 @@ async function init() {
           const opt = document.createElement("option");
           opt.value = m.id;
           opt.textContent = `${m.name} — ${m.req}`;
+          if (m.available === false) {
+            opt.disabled = true;
+            opt.textContent += " — Not recommended here";
+          }
           dom.modelSelect.appendChild(opt);
         });
 
         // Auto-select best brain
         dom.modelSelect.value = config.active_brain_model;
         if (savedModel) {
-          const exists = Array.from(dom.modelSelect.options).some(
+          const savedOption = Array.from(dom.modelSelect.options).find(
             (o) => o.value === savedModel,
           );
-          if (exists) dom.modelSelect.value = savedModel;
+          if (savedOption && !savedOption.disabled) {
+            dom.modelSelect.value = savedModel;
+          } else {
+            localStorage.removeItem("bipod_model");
+          }
         }
       }
 
@@ -96,17 +104,7 @@ async function init() {
     console.error("Failed to fetch system config", e);
   }
 
-  // Restore conversation from URL param
-  const params = new URLSearchParams(window.location.search);
-  const urlConvId = params.get("c");
-  const target =
-    urlConvId && state.conversations.find((c) => c.id === urlConvId)
-      ? urlConvId
-      : state.conversations.length > 0
-        ? state.conversations[0].id
-        : null;
-
-  if (target) switchConversation(target);
+  await restoreConversationSelection();
   setupEventListeners();
 }
 

@@ -173,6 +173,18 @@ class IntentRouter:
 
     async def classify(self, user_input: str) -> Optional[str]:
         """Classifies user input using cosine similarity against route centroids."""
+        scored = await self.classify_with_scores(user_input)
+        if not scored:
+            return None
+        return scored[0]
+
+    async def classify_with_scores(
+        self,
+        user_input: str,
+        threshold: float = 0.52,
+        margin: float = 0.0,
+    ) -> Optional[tuple[str, float, float]]:
+        """Classify input and optionally require a confidence margin over runner-up."""
         await self._ensure_initialized()
         
         if not self.route_vectors:
@@ -185,6 +197,7 @@ class IntentRouter:
                 
             best_route = None
             max_sim = -1.0
+            second_best = -1.0
             
             # Normalize query vector for cosine similarity
             query_vec = np.array(query_emb)
@@ -197,15 +210,17 @@ class IntentRouter:
                 similarity = dot_product / (query_norm * route_norm)
                 
                 if similarity > max_sim:
+                    second_best = max_sim
                     max_sim = similarity
                     best_route = route_name
+                elif similarity > second_best:
+                    second_best = similarity
             
             logger.info(f"Intent classified: '{best_route}' (Confidence: {max_sim:.2f})")
             
-            # Semantic threshold: if similarity is too low, treat as pure chat.
-            # 0.52 is a balanced threshold for nomic-embed-text
-            if max_sim > 0.52:
-                return best_route
+            route_margin = max_sim - second_best if second_best >= 0 else max_sim
+            if max_sim > threshold and route_margin >= margin:
+                return best_route, max_sim, route_margin
             return None
             
         except Exception as e:

@@ -1,9 +1,12 @@
 export let state = {
-  currentConversationId: null,
+  currentConversationId: localStorage.getItem("bipod_current_conversation"),
   conversations: [],
   authToken: localStorage.getItem("bipod_token"),
   currentUser: null,
   currentAttachments: [],
+  conversationDrafts: {},
+  pendingConversationIds: {},
+  activeMessagesRequestId: 0,
 };
 
 // --- Safe DOM Access Helper ---
@@ -49,6 +52,7 @@ export const dom = new Proxy(
         attachBtn: "attach-btn",
         fileUpload: "file-upload",
         attachmentPreviewContainer: "attachment-preview-container",
+        sendBtn: "send-btn",
         authOverlay: "auth-overlay",
         loginForm: "login-form",
         signupForm: "signup-form",

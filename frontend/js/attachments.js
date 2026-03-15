@@ -1,4 +1,5 @@
 import { state, dom } from "./state.js";
+import { saveCurrentComposerDraft } from "./chat.js";
 
 export function renderAttachmentPreviews() {
   dom.attachmentPreviewContainer.innerHTML = "";
@@ -33,6 +34,7 @@ export function renderAttachmentPreviews() {
       e.stopPropagation();
       state.currentAttachments.splice(index, 1);
       renderAttachmentPreviews();
+      saveCurrentComposerDraft();
     };
     item.appendChild(removeBtn);
 

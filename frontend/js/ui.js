@@ -1,10 +1,30 @@
 import { state, dom } from "./state.js";
 import { createNewConversation } from "./conversations.js";
-import { sendMessage, downloadImage } from "./chat.js";
+import {
+  sendMessage,
+  downloadImage,
+  resendMessage,
+  setComposerDraft,
+  saveCurrentComposerDraft,
+} from "./chat.js";
 import { renderAttachmentPreviews } from "./attachments.js";
 import { handleLogin, handleSignup, handleLogout } from "./auth.js";
+import { setUserMessageActionHandler } from "./message-renderer.js";
+import { showToast } from "./utils.js";
 
 export function setupEventListeners() {
+  setUserMessageActionHandler(async (action, payload) => {
+    if (action === "edit") {
+      setComposerDraft(payload.text, payload.attachments || []);
+      showToast("Message loaded into the composer");
+      return;
+    }
+
+    if (action === "resend") {
+      await resendMessage(payload.text, payload.attachments || []);
+    }
+  });
+
   // Brain Settings Toggle
   if (dom.brainSettingsBtn && dom.brainSettingsPanel) {
     dom.brainSettingsBtn.addEventListener("click", (e) => {
@@ -107,6 +127,7 @@ export function setupEventListeners() {
           });
 
           renderAttachmentPreviews();
+          saveCurrentComposerDraft();
         };
         reader.readAsDataURL(file);
       });
@@ -118,6 +139,7 @@ export function setupEventListeners() {
     dom.userInput.addEventListener("input", function () {
       this.style.height = "auto";
       this.style.height = this.scrollHeight + "px";
+      saveCurrentComposerDraft();
     });
 
     dom.userInput.addEventListener("keydown", (e) => {

@@ -171,8 +171,13 @@
             </p>
           </div>
           <!-- Messages will be injected here -->
-          <div id="loading-indicator" class="typing-indicator hidden">
+          <div
+            id="loading-indicator"
+            class="typing-indicator hidden"
+            aria-live="polite"
+          >
             <span></span><span></span><span></span>
+            <div class="typing-label">Bipod is thinking</div>
           </div>
         </div>
 

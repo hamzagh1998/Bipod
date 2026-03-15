@@ -486,8 +486,12 @@ header h1 {
 
 /* User Message Actions (edit / resend) */
 .user-msg-actions {
+    display: flex;
+    gap: 4px;
     justify-content: flex-end;
     margin-top: 6px;
+    opacity: 0;
+    transition: opacity var(--transition-fast);
 }
 
 .message.user:hover .user-msg-actions {
@@ -912,6 +916,13 @@ footer {
     flex-shrink: 0;
 }
 
+#send-btn:disabled,
+.icon-btn:disabled,
+#user-input:disabled {
+    cursor: not-allowed;
+    opacity: 0.65;
+}
+
 #send-btn:hover {
     background: var(--accent-soft);
     transform: translateY(-1px);
@@ -924,6 +935,11 @@ footer {
 #send-btn .material-symbols-rounded {
     font-size: 18px;
     font-variation-settings: 'FILL' 1, 'wght' 600;
+}
+
+#chat-form.is-pending {
+    border-color: var(--accent-soft);
+    box-shadow: 0 0 0 3px rgba(168, 85, 247, 0.12);
 }
 
 .footer-hint {
@@ -944,8 +960,16 @@ footer {
 .typing-indicator {
     display: flex;
     gap: 5px;
-    padding: 8px 0;
+    padding: 10px 14px;
     align-items: center;
+    max-width: 780px;
+    width: fit-content;
+    margin: 6px 0;
+    color: var(--text-dim);
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid var(--border-color);
+    border-radius: 16px 16px 16px 4px;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.18);
 }
 
 .typing-indicator span {
@@ -966,6 +990,13 @@ footer {
 
 .typing-indicator span:nth-child(3) {
     animation-delay: 0s;
+}
+
+.typing-label {
+    margin-left: 8px;
+    font-size: 0.76rem;
+    color: var(--text-dim);
+    letter-spacing: 0.01em;
 }
 
 @keyframes bounce {

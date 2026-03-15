@@ -131,11 +131,25 @@ class Settings(BaseSettings):
     
     # Brain tiers
     SMART_MODEL: str = "qwen2.5:7b"      # Best for tool calling & precision
-    HEAVY_MODEL: str = "llama3.1:8b"     # High intelligence, creative baseline
+    HEAVY_MODEL: str = "qwen3:8b"        # High intelligence, creative baseline
     MEDIUM_MODEL: str = "llama3.2:3b"    # For standard PC / CPU fallback
     LIGHT_MODEL: str = "llama3.2:1b"     # For Pi 5 / Edge devices
     VISION_MODEL: str = "moondream"      # Specialized for image analysis
     EMBEDDING_MODEL: str = "nomic-embed-text" # Local vector embeddings
+
+    # Ollama runtime tuning
+    OLLAMA_NUM_CTX: int = 4096
+    OLLAMA_TEMPERATURE: float = 0.3
+    OLLAMA_REPEAT_PENALTY: float = 1.1
+    RECENT_HISTORY_MESSAGES: int = 10
+    HISTORY_SUMMARY_TRIGGER: int = 14
+    HISTORY_SUMMARY_CHAR_LIMIT: int = 12000
+    ROUTER_USE_SEMANTIC_FALLBACK: bool = True
+    ROUTER_SEMANTIC_THRESHOLD: float = 0.6
+    ROUTER_MARGIN_THRESHOLD: float = 0.08
+    MAX_MEMORY_ITEMS: int = 3
+    MAX_ATTACHMENT_TEXT_CHARS: int = 12000
+    BRAIN_ENABLE_ACTION_HANDOFF: bool = True
 
     # Imagine tiers
     IMAGINE_FLUX_MODEL: str = "flux-schnell"     # Photoreal Quality
@@ -151,8 +165,8 @@ class Settings(BaseSettings):
             return self.LIGHT_MODEL
         if not self.USE_GPU:
             return self.MEDIUM_MODEL
-        # For GPU users, recommend the creative heavy hitter by default
-        return self.HEAVY_MODEL
+        # For desktop GPU users, prefer the smarter 7B model as the default balance.
+        return self.SMART_MODEL
 
     @computed_field
     @property

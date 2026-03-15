@@ -53,10 +53,16 @@ async def get_system_config():
         "vram_tier": vram_tier,
         "active_brain_model": settings.ACTIVE_MODEL,
         "available_brain_models": [
-            {"id": settings.SMART_MODEL, "name": "Smart (7b)", "tier": "Heavy", "req": "8GB+ VRAM"},
-            {"id": settings.HEAVY_MODEL, "name": "Heavy (8b)", "tier": "Heavy", "req": "8GB+ VRAM/RAM"},
-            {"id": settings.MEDIUM_MODEL, "name": "Medium (3b)", "tier": "Medium", "req": "4GB+ RAM"},
-            {"id": settings.LIGHT_MODEL, "name": "Light (1b)", "tier": "Light", "req": "1GB+ RAM"},
+            {"id": settings.SMART_MODEL, "name": "Smart (7b)", "tier": "Heavy", "req": "8GB+ VRAM", "available": True},
+            {"id": settings.HEAVY_MODEL, "name": "Heavy (8b)", "tier": "Heavy", "req": "8GB+ VRAM/RAM", "available": True},
+            {"id": settings.MEDIUM_MODEL, "name": "Medium (3b)", "tier": "Medium", "req": "4GB+ RAM", "available": True},
+            {
+                "id": settings.LIGHT_MODEL,
+                "name": "Light (1b, edge only)",
+                "tier": "Light",
+                "req": "1GB+ RAM",
+                "available": settings.HARDWARE_TARGET == "arm64",
+            },
         ],
         "active_imagine_model": settings.ACTIVE_IMAGINE_MODEL,
         "available_imagine_models": imagine_models if imagine_models else [
@@ -230,4 +236,3 @@ async def upscale_image(
         return JSONResponse(status_code=resp.status_code, content=content)
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Imagine service unavailable: {str(e)}")
-

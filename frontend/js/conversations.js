@@ -2,13 +2,89 @@ import { state, dom } from "./state.js";
 import { apiFetch } from "./api.js";
 import { showToast, createWelcomeHero, closeSidebarOnMobile } from "./utils.js";
 import { appendMessage } from "./message-renderer.js";
+import {
+  refreshComposerState,
+  restoreComposerDraft,
+  saveCurrentComposerDraft,
+} from "./chat.js";
 
-export async function fetchConversations() {
+function ensureLoadingIndicator() {
+  if (dom.loadingIndicator) return dom.loadingIndicator;
+  if (!dom.chatWindow) return null;
+
+  const indicator = document.createElement("div");
+  indicator.id = "loading-indicator";
+  indicator.className = "typing-indicator hidden";
+  indicator.setAttribute("aria-live", "polite");
+  indicator.innerHTML =
+    '<span></span><span></span><span></span><div class="typing-label">Bipod is thinking</div>';
+  dom.chatWindow.appendChild(indicator);
+  return indicator;
+}
+
+function resetChatWindow() {
+  if (!dom.chatWindow) return null;
+
+  const indicator = ensureLoadingIndicator();
+  if (indicator?.parentElement) {
+    indicator.parentElement.removeChild(indicator);
+  }
+
+  dom.chatWindow.innerHTML = "";
+  if (indicator) {
+    dom.chatWindow.appendChild(indicator);
+  }
+  return indicator;
+}
+
+export function resolvePreferredConversationId() {
+  const params = new URLSearchParams(window.location.search);
+  const urlConvId = params.get("c");
+  const savedConversationId = localStorage.getItem("bipod_current_conversation");
+
+  if (urlConvId && state.conversations.some((c) => c.id === urlConvId)) {
+    return urlConvId;
+  }
+  if (
+    state.currentConversationId &&
+    state.conversations.some((c) => c.id === state.currentConversationId)
+  ) {
+    return state.currentConversationId;
+  }
+  if (
+    savedConversationId &&
+    state.conversations.some((c) => c.id === savedConversationId)
+  ) {
+    return savedConversationId;
+  }
+
+  return state.conversations.length > 0 ? state.conversations[0].id : null;
+}
+
+export async function restoreConversationSelection() {
+  const target = resolvePreferredConversationId();
+  if (!target) return;
+
+  const hasRenderedMessages = !!dom.chatWindow?.querySelector(".message");
+
+  if (state.currentConversationId === target && hasRenderedMessages) {
+    renderConversations();
+    return;
+  }
+
+  await switchConversation(target);
+}
+
+export async function fetchConversations(options = {}) {
+  const { restoreSelection = false } = options;
   try {
     const response = await apiFetch("/conversations");
     if (!response.ok) throw new Error("Failed to load conversations");
     state.conversations = await response.json();
     renderConversations();
+    if (restoreSelection) {
+      await restoreConversationSelection();
+    }
   } catch (error) {
     console.error("Error loading conversations:", error);
   }
@@ -16,40 +92,69 @@ export async function fetchConversations() {
 
 export async function createNewConversation(title = "New Conversation") {
   try {
+    saveCurrentComposerDraft();
     const response = await apiFetch("/conversations", {
       method: "POST",
       body: JSON.stringify({ title }),
     });
     const data = await response.json();
     state.currentConversationId = data.id;
+    localStorage.setItem("bipod_current_conversation", data.id);
     await fetchConversations();
-    switchConversation(state.currentConversationId);
-    closeSidebarOnMobile();
+    await switchConversation(state.currentConversationId);
   } catch (e) {
     console.error("Failed to create conversation", e);
   }
 }
 
 export async function loadMessages(convId) {
-  dom.chatWindow.innerHTML = "";
-  dom.chatWindow.appendChild(dom.loadingIndicator);
-  dom.loadingIndicator.classList.remove("hidden");
+  const requestId = ++state.activeMessagesRequestId;
+  const indicator = resetChatWindow();
+  if (indicator) indicator.classList.remove("hidden");
 
   try {
     const response = await apiFetch(`/conversations/${convId}/messages`);
     if (!response.ok) throw new Error("Failed to load messages");
     const messages = await response.json();
-    if (messages.length === 0 && dom.welcomeHero) {
+
+    if (
+      requestId !== state.activeMessagesRequestId ||
+      state.currentConversationId !== convId
+    ) {
+      return;
+    }
+
+    if (messages.length === 0) {
       const hero = createWelcomeHero();
-      dom.chatWindow.insertBefore(hero, dom.loadingIndicator);
+      dom.chatWindow.insertBefore(hero, ensureLoadingIndicator());
     }
     messages.forEach((m) =>
-      appendMessage(m.role === "assistant" ? "ai" : m.role, m.content, false),
+      appendMessage(m.role === "assistant" ? "ai" : m.role, m.content, false, {
+        messageId: m.id,
+        attachments: m.attachments || [],
+        createdAt: m.created_at,
+      }),
     );
   } catch (e) {
     console.error("Failed to load messages", e);
+    if (
+      requestId === state.activeMessagesRequestId &&
+      state.currentConversationId === convId
+    ) {
+      appendMessage(
+        "system",
+        "Failed to load this conversation. Please try switching to it again.",
+        false,
+      );
+    }
   } finally {
-    dom.loadingIndicator.classList.add("hidden");
+    if (
+      requestId === state.activeMessagesRequestId &&
+      state.currentConversationId === convId
+    ) {
+      refreshComposerState();
+      dom.chatWindow.scrollTop = dom.chatWindow.scrollHeight;
+    }
   }
 }
 
@@ -126,14 +231,22 @@ export async function deleteConversation(id, e) {
   if (!confirm("Are you sure you want to delete this conversation?")) return;
 
   await apiFetch(`/conversations/${id}`, { method: "DELETE" });
+  delete state.conversationDrafts[id];
+  delete state.pendingConversationIds[id];
   if (state.currentConversationId === id) {
     state.currentConversationId = null;
-    dom.chatWindow.innerHTML = "";
-    dom.chatWindow.appendChild(dom.loadingIndicator);
-    if (dom.welcomeHero) dom.welcomeHero.classList.remove("hidden");
+    localStorage.removeItem("bipod_current_conversation");
+    const url = new URL(window.location);
+    url.searchParams.delete("c");
+    history.replaceState(null, "", url);
+    resetChatWindow();
+    dom.chatWindow.insertBefore(createWelcomeHero(), ensureLoadingIndicator());
     dom.chatTitle.innerText = "New Chat";
   }
   await fetchConversations();
+  if (!state.currentConversationId && state.conversations.length > 0) {
+    await switchConversation(state.conversations[0].id);
+  }
 }
 
 export function renderConversations() {
@@ -178,22 +291,30 @@ export function renderConversations() {
     actionsDiv.appendChild(deleteBtn);
 
     item.appendChild(actionsDiv);
-    item.onclick = () => switchConversation(c.id);
+    item.onclick = async () => {
+      await switchConversation(c.id);
+    };
     dom.historyContainer.appendChild(item);
   });
 }
 
-export function switchConversation(id) {
+export async function switchConversation(id) {
+  if (!id) return;
+  if (state.currentConversationId !== id) {
+    saveCurrentComposerDraft(state.currentConversationId);
+  }
   const conv = state.conversations.find((c) => c.id === id);
   state.currentConversationId = id;
+  localStorage.setItem("bipod_current_conversation", id);
   dom.chatTitle.innerText = conv ? conv.title : "Bipod";
+  restoreComposerDraft(id, { focus: false });
 
   const url = new URL(window.location);
   url.searchParams.set("c", id);
   history.replaceState(null, "", url);
 
-  dom.loadingIndicator.classList.add("hidden");
   renderConversations();
-  loadMessages(id);
+  await loadMessages(id);
+  refreshComposerState();
   closeSidebarOnMobile();
 }
