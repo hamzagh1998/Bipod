@@ -79,7 +79,7 @@ async def get_system_config():
              # Fallback list if service is unreachable
             {"id": "sdxl-lightning", "name": "SDXL Lightning (Fast)", "req": "8GB+ VRAM", "supports_img2img": True, "supports_negative_prompt": True},
             {"id": "stable-diffusion", "name": "Realistic Vision V6", "req": "4GB+ VRAM", "supports_img2img": True, "supports_negative_prompt": True},
-            {"id": "flux-schnell", "name": "Flux.1-schnell (4-bit, Photorealism)", "req": "10GB+ VRAM", "supports_img2img": False, "supports_negative_prompt": False, "available": total_vram >= 5.5},
+            {"id": "flux-schnell", "name": "Flux.1-schnell (4-bit, Photorealism)", "req": "8GB+ VRAM", "supports_img2img": False, "supports_negative_prompt": False, "available": total_vram >= 8.0},
             {"id": "dalle-mini", "name": "Tiny-SD (CPU)", "req": "None (CPU)", "supports_img2img": True, "supports_negative_prompt": True}
         ]
     }

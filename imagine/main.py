@@ -104,7 +104,7 @@ SDXL_BASE_REPO = "stabilityai/stable-diffusion-xl-base-1.0"
 SDXL_LIGHTNING_REPO = "ByteDance/SDXL-Lightning"
 SDXL_LIGHTNING_UNET_FILE = "sdxl_lightning_4step_unet.safetensors"
 
-FLUX_MIN_VRAM_GB = 5.5
+FLUX_MIN_VRAM_GB = 8.0
 SDXL_LIGHTNING_NATIVE_EDGE = 1024
 REALESRGAN_MODEL_FILENAME = "RealESRGAN_x4plus.pth"
 REALESRGAN_MODEL_URL = (
@@ -975,8 +975,8 @@ def load_flux_pipeline(repo_id: str, device: str, vram_tier: Optional[str]):
             ),
         )
 
-    use_4bit_t5  = vram_tier in ("mid_low", "medium")
-    use_seq      = vram_tier in ("mid_low",)
+    use_4bit_t5  = vram_tier in ("medium",)
+    use_seq      = vram_tier in ("medium",)
 
     common = {
         "cache_dir":        HF_HOME,
@@ -985,9 +985,11 @@ def load_flux_pipeline(repo_id: str, device: str, vram_tier: Optional[str]):
         "low_cpu_mem_usage": True,
     }
 
+    t5_device = "cuda" if use_4bit_t5 else "pipeline-default"
     logger.info(
         f"[flux] Loading | T5: {'NF4 4-bit' if use_4bit_t5 else 'bf16'} | "
-        f"offload: {'sequential' if use_seq else 'model'}"
+        f"offload: {'sequential' if use_seq else 'model'} | "
+        f"T5 device: {t5_device}"
     )
 
     if use_4bit_t5:
@@ -1005,20 +1007,41 @@ def load_flux_pipeline(repo_id: str, device: str, vram_tier: Optional[str]):
             bnb_4bit_compute_dtype=torch.bfloat16,
             bnb_4bit_use_double_quant=True,
         )
-        logger.info("[flux] Loading T5-XXL in NF4 4-bit...")
-        text_encoder_2 = T5EncoderModel.from_pretrained(
-            repo_id,
-            subfolder="text_encoder_2",
-            quantization_config=bnb_config,
-            torch_dtype=torch.bfloat16,
-            **common,
-        )
-        txt2img_pipe = FluxPipeline.from_pretrained(
-            repo_id,
-            text_encoder_2=text_encoder_2,
-            torch_dtype=torch.bfloat16,
-            **common,
-        )
+
+        def _load_flux_with_4bit_t5():
+            logger.info("[flux] Loading T5-XXL in NF4 4-bit on CUDA...")
+            encoder_kwargs = {
+                "quantization_config": bnb_config,
+                "torch_dtype": torch.bfloat16,
+                **common,
+            }
+
+            text_encoder_2 = T5EncoderModel.from_pretrained(
+                repo_id,
+                subfolder="text_encoder_2",
+                **encoder_kwargs,
+            )
+            return FluxPipeline.from_pretrained(
+                repo_id,
+                text_encoder_2=text_encoder_2,
+                torch_dtype=torch.bfloat16,
+                **common,
+            )
+
+        try:
+            txt2img_pipe = _load_flux_with_4bit_t5()
+        except torch.OutOfMemoryError:
+            logger.warning(
+                "[flux] CUDA OOM while loading 4-bit T5 on CUDA"
+            )
+            aggressive_cleanup()
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Flux.1 4-bit T5 loading ran out of VRAM on this GPU. "
+                    "Use 'sdxl-lightning' or run Flux on a GPU with more VRAM."
+                ),
+            )
     else:
         txt2img_pipe = FluxPipeline.from_pretrained(
             repo_id,
@@ -1573,7 +1596,7 @@ def list_models():
                 m["max_resolution"]         = f"{w}x{h}"
                 m["recommended_resolution"] = f"{w}x{h}"
                 m["vram_usage"] = {
-                    "mid_low": "~5-6GB (4-bit T5)",
+                    "mid_low": "unsupported (<8GB VRAM in this build)",
                     "medium":  "~7-8GB (4-bit T5)",
                     "high":    "~10-12GB (bf16)",
                     "ultra":   "~14-16GB (bf16)",
