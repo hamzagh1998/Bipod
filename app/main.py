@@ -59,6 +59,14 @@ async def studio_html():
 async def studio():
     return FileResponse("frontend/studio.html")
 
+@app.get("/coach.html")
+async def coach_html():
+    return FileResponse("frontend/coach.html")
+
+@app.get("/coach")
+async def coach():
+    return FileResponse("frontend/coach.html")
+
 # Global Exception Handler
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):

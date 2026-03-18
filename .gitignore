@@ -38,3 +38,7 @@ Thumbs.db
 
 # --- Local Debug ---
 firebase-debug.log
+
+# --- Node Frontend Build ---
+node_modules/
+npm-debug.log*

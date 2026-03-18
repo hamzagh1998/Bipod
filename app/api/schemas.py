@@ -1,5 +1,5 @@
-from pydantic import BaseModel
-from typing import List, Optional
+from pydantic import BaseModel, ConfigDict, Field
+from typing import Any, Dict, List, Literal, Optional
 from datetime import datetime
 
 # --- Auth Models ---
@@ -97,3 +97,122 @@ class StudioPromptImproveRequest(BaseModel):
 class StudioPromptImproveResponse(BaseModel):
     prompt: str
     negative_prompt: str
+
+
+# --- Coach Models ---
+class CoachMistakeInput(BaseModel):
+    category: str
+    detail: str
+    severity: str = "medium"
+    suggestion: Optional[str] = None
+    metadata: Optional[Dict[str, Any]] = None
+
+
+class CoachSessionCreate(BaseModel):
+    title: Optional[str] = None
+    target_language: str = "English"
+    native_language: Optional[str] = None
+    cefr_level: str = "A2"
+    audio_retention_opt_in: bool = False
+    focus_area: Optional[str] = None
+    model_id: Optional[str] = None
+
+
+class CoachSessionResponse(BaseModel):
+    id: str
+    user_id: int
+    title: str
+    target_language: str
+    native_language: Optional[str] = None
+    cefr_level: str
+    audio_retention_opt_in: bool = False
+    focus_area: Optional[str] = None
+    model_id: Optional[str] = None
+    status: str
+    created_at: datetime
+    updated_at: datetime
+    turn_count: int = 0
+    mistake_count: int = 0
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class CoachTurnCreate(BaseModel):
+    transcript: str
+    reply: str
+    score: int
+    correction: Optional[str] = None
+    explanation: Optional[str] = None
+    model_id: Optional[str] = None
+    latency_ms: Optional[int] = None
+    mistakes: List[CoachMistakeInput] = Field(default_factory=list)
+
+
+class CoachMistakeResponse(BaseModel):
+    id: int
+    session_id: str
+    turn_id: int
+    user_id: int
+    category: str
+    detail: str
+    severity: str
+    suggestion: Optional[str] = None
+    metadata_json: Optional[Dict[str, Any]] = None
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class CoachTurnResponse(BaseModel):
+    id: int
+    session_id: str
+    user_id: int
+    turn_index: int
+    transcript: str
+    reply: str
+    correction: Optional[str] = None
+    explanation: Optional[str] = None
+    score: Optional[int] = None
+    model_id: Optional[str] = None
+    latency_ms: Optional[int] = None
+    created_at: datetime
+    mistakes: List[CoachMistakeResponse] = Field(default_factory=list)
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class CoachProgressSummary(BaseModel):
+    user_id: int
+    total_sessions: int
+    total_turns: int
+    total_mistakes: int
+    mistake_counts_by_category: Dict[str, int] = Field(default_factory=dict)
+    turn_counts_by_model: Dict[str, int] = Field(default_factory=dict)
+    active_sessions: int = 0
+    latest_session_id: Optional[str] = None
+    latest_session_title: Optional[str] = None
+    latest_session_turns: int = 0
+
+
+class CoachModelSelectionResponse(BaseModel):
+    selected_model: str
+    candidate_models: List[str] = Field(default_factory=list)
+    latency_budget_ms: Optional[int] = None
+
+
+class CoachEvent(BaseModel):
+    type: Literal[
+        "stt_partial",
+        "stt_final",
+        "coach_reply",
+        "feedback",
+        "score",
+        "model_fallback",
+        "done",
+        "error",
+    ]
+    session_id: Optional[str] = None
+    turn_id: Optional[str] = None
+    message: Optional[str] = None
+    detail: Optional[str] = None
+    payload: Dict[str, Any] = Field(default_factory=dict)

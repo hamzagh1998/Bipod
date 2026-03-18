@@ -425,3 +425,8 @@ async def improve_studio_prompt(
         raise
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Prompt improvement failed: {str(e)}")
+
+
+from app.api.coach import router as coach_router
+
+router.include_router(coach_router, prefix="/coach", tags=["coach"])

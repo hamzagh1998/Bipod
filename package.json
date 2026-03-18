@@ -1,0 +1,17 @@
+{
+  "name": "bipod-coach-frontend",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Local build pipeline for Bipod Coach frontend bundle",
+  "scripts": {
+    "build:coach": "node scripts/build-coach.mjs",
+    "build:coach:watch": "node scripts/build-coach.mjs --watch"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.10"
+  }
+}

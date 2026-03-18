@@ -91,6 +91,24 @@ Bipod uses a **Sidecar Pattern**, separating the Inference Server (Ollama) from 
    docker compose logs -f
    ```
 
+## 🧩 Coach Frontend Build (Local Bundle)
+
+The `/coach` page now uses a locally bundled React build (no CDN React/Babel at runtime).
+
+```bash
+# Install JS build dependencies once
+npm install
+
+# Build coach bundle
+npm run build:coach
+
+# Optional: rebuild automatically while editing
+npm run build:coach:watch
+```
+
+When building `bipod-app` via Docker, the coach bundle is now built automatically in the image (`docker/Dockerfile.app`).
+`docker-compose.yaml` intentionally does not bind-mount `./frontend` so container runs always use the prebuilt bundle from the image.
+
 ## 🧠 Required Models
 
 Bipod uses different Ollama models for each brain tier. Pull the models below into the `bipod_ollama` container before using those tiers.

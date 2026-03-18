@@ -1,3 +1,14 @@
+FROM node:20-slim AS coach-builder
+
+WORKDIR /build
+
+COPY package.json package-lock.json ./
+COPY scripts/build-coach.mjs ./scripts/build-coach.mjs
+COPY frontend/js/coach-app.jsx ./frontend/js/coach-app.jsx
+
+RUN npm ci
+RUN npm run build:coach
+
 FROM python:3.13-slim
 
 # Weightless Intelligence: Environment configuration
@@ -28,6 +39,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application logic and frontend assets
 COPY ./app ./app
 COPY ./frontend ./frontend
+COPY --from=coach-builder /build/frontend/js/coach-app.bundle.js ./frontend/js/coach-app.bundle.js
 
 # Metadata and Data volumes
 VOLUME ["/app/data"]
