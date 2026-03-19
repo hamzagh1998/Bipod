@@ -200,12 +200,14 @@ def test_coach_stream_turn_emits_ndjson_events(monkeypatch):
         audio,
         transcript_hint=None,
         preferred_model=None,
+        preferred_asr_model=None,
         persona_style=None,
     ):
         assert user_id == 7
         assert session_id == expected_session_id
         assert transcript_hint == "coach me"
         assert preferred_model == "small-model"
+        assert preferred_asr_model == "accurate"
         assert persona_style == "calm tactical persona"
         seen_audio_reads.append(await audio.read())
         await audio.seek(0)
@@ -225,6 +227,7 @@ def test_coach_stream_turn_emits_ndjson_events(monkeypatch):
                 audio=_make_upload_file(b"audio-bytes"),
                 transcript_hint="coach me",
                 preferred_model="small-model",
+                preferred_asr_model="accurate",
                 persona_style="calm tactical persona",
                 user_id=7,
             )

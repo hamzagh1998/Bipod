@@ -5,7 +5,14 @@ const STORAGE_KEYS = {
   token: "bipod_token",
 };
 
-const SUBJECT_OPTIONS = ["Job interview", "Travel", "Technology", "Daily life", "Business meeting", "Custom"];
+const SUBJECT_OPTIONS = [
+  "Job interview",
+  "Travel",
+  "Technology",
+  "Daily life",
+  "Business meeting",
+  "Custom",
+];
 
 const LANGUAGE_OPTIONS = [
   "English",
@@ -40,7 +47,7 @@ const PERSONA_OPTIONS = [
     id: "anby",
     label: "Anby",
     prompt:
-      "Persona: Calm, tactical, low-drama, mission-focused speaker with short, precise sentences, dry wit, and practical advice. Stay helpful and respectful.",
+      "Impersonate Anby Demara from Zenless Zone Zero for this full session; do not switch identity or names. Core profile: reserved kuudere, calm and quietly intense, stoic under pressure, socially inexperienced, loyal and protective, combat-efficient with a surgical mindset, introspective with memory gaps from a mysterious past, and a known burger lover. Speech style: brief tactical sentences, low drama, dry/deadpan humor, occasional classic-movie framing, respectful but direct coaching. Keep roleplay consistent while still acting as a language coach: give practical corrections and ask one concise follow-up question each turn in the target language.",
   },
   {
     id: "friendly_mentor",
@@ -52,19 +59,19 @@ const PERSONA_OPTIONS = [
     id: "bmo",
     label: "BMO",
     prompt:
-      "Persona: Playful, cheerful, and curious. Keep replies short and upbeat, ask simple follow-up questions, and stay supportive.",
+      "Impersonate BMO from Adventure Time for this full session; stay in character and do not rename yourself. Core profile: cheerful, loyal, trusting, imaginative, playful, emotionally expressive, and sometimes oddly dark in a harmless comedic way; likes roleplay, personifies objects, and can mention Football as a quirky alter ego. Speech style: childlike curiosity, upbeat and whimsical phrasing, short playful lines, warm encouragement, and gentle care for the user. Keep it coach-useful: still provide clear language corrections and exactly one simple follow-up question each turn.",
   },
   {
     id: "goku",
     label: "Goku",
     prompt:
-      "Persona: Energetic, straightforward, and positive. Encourage effort, keep language simple, and push for one stronger sentence each turn.",
+      "Impersonate Son Goku from Dragon Ball for this full session; stay in character and do not rename yourself. Core profile: pure-hearted, optimistic, straightforward, battle-obsessed in a healthy self-improvement sense, forgiving, socially naive, and an idiot-savant with elite combat intuition. Speech style: energetic, simple, honest, motivational, and challenge-oriented ('let's get stronger'). Keep roleplay aligned with language coaching: encourage effort, correct clearly without long lectures, and ask one direct follow-up question each turn.",
   },
   {
     id: "gute",
     label: "Gute",
     prompt:
-      "Persona: Calm, polite, and precise. Give practical corrections and ask one clear question at a time.",
+      "Impersonate Gute as a normal adult male speaking naturally (not a fictional hero voice). Personality: calm, polite, grounded, practical, patient, and respectful. Speech style: clear everyday language, concise sentences, neutral friendly tone, no gimmicks. Keep the coaching structure strict: provide practical correction and ask one clear follow-up question each turn.",
   },
 ];
 
@@ -189,7 +196,12 @@ async function apiFetchJson(path, token, options = {}) {
     if (body) {
       try {
         const parsed = JSON.parse(body);
-        if (parsed && typeof parsed === "object" && typeof parsed.detail === "string" && parsed.detail.trim()) {
+        if (
+          parsed &&
+          typeof parsed === "object" &&
+          typeof parsed.detail === "string" &&
+          parsed.detail.trim()
+        ) {
           detail = parsed.detail.trim();
         }
       } catch {
@@ -212,6 +224,7 @@ function normalizeMistakes(value) {
   if (!Array.isArray(value)) {
     return [];
   }
+  const lowValueMissingPattern = /missing\s+'([^']{1,3})'\s+in\s+'([^']+)'/i;
   return value
     .map((item) => ({
       category: String(item?.category || "general"),
@@ -219,12 +232,42 @@ function normalizeMistakes(value) {
       severity: String(item?.severity || "medium"),
       suggestion: String(item?.suggestion || "").trim(),
     }))
-    .filter((item) => item.detail || item.suggestion);
+    .filter((item) => {
+      if (!item.detail && !item.suggestion) {
+        return false;
+      }
+      const match = item.detail.match(lowValueMissingPattern);
+      if (!match) {
+        return true;
+      }
+      const missingChar = String(match[1] || "")
+        .trim()
+        .toLowerCase();
+      const targetWord = String(match[2] || "")
+        .trim()
+        .toLowerCase();
+      const suggestion = String(item.suggestion || "")
+        .trim()
+        .toLowerCase();
+      if (missingChar && targetWord && targetWord.includes(missingChar)) {
+        return false;
+      }
+      if (targetWord && suggestion && suggestion === targetWord) {
+        return false;
+      }
+      return true;
+    });
 }
 
 function eventText(event) {
   return String(
-    event?.text ?? event?.summary ?? event?.correction ?? event?.detail ?? event?.message ?? event?.value ?? "",
+    event?.text ??
+      event?.summary ??
+      event?.correction ??
+      event?.detail ??
+      event?.message ??
+      event?.value ??
+      "",
   ).trim();
 }
 
@@ -237,8 +280,13 @@ function buildStarterQuestion(subject, language) {
 function normalizeTtsStatus(payload) {
   const source = payload && typeof payload === "object" ? payload : {};
   const ready = Boolean(source.ready);
-  const state = String(source.state || (ready ? "ready" : "idle")).trim().toLowerCase() || "idle";
-  const detail = String(source.detail || "").trim() || (ready ? "Voice model ready." : "Voice model is preparing.");
+  const state =
+    String(source.state || (ready ? "ready" : "idle"))
+      .trim()
+      .toLowerCase() || "idle";
+  const detail =
+    String(source.detail || "").trim() ||
+    (ready ? "Voice model ready." : "Voice model is preparing.");
   return {
     ok: Boolean(source.ok ?? true),
     engine: String(source.engine || "cosyvoice"),
@@ -255,13 +303,47 @@ function normalizeTtsStatus(payload) {
 
 function normalizeRuntimeStatus(payload) {
   const source = payload && typeof payload === "object" ? payload : {};
-  const components = source.components && typeof source.components === "object" ? source.components : {};
+  const components =
+    source.components && typeof source.components === "object"
+      ? source.components
+      : {};
+  const rawProfile =
+    source.runtime_profile && typeof source.runtime_profile === "object"
+      ? source.runtime_profile
+      : {};
+  const toNumberOrNull = (value) => {
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return value;
+    }
+    if (typeof value === "string" && value.trim()) {
+      const parsed = Number(value);
+      return Number.isFinite(parsed) ? parsed : null;
+    }
+    return null;
+  };
   const normalizeComponent = (name) => {
-    const component = components[name] && typeof components[name] === "object" ? components[name] : {};
+    const component =
+      components[name] && typeof components[name] === "object"
+        ? components[name]
+        : {};
+    const availableModels = Array.isArray(component.available_models)
+      ? component.available_models
+          .map((item) => String(item || "").trim())
+          .filter((item) => Boolean(item))
+      : [];
     return {
       ready: Boolean(component.ready),
-      state: String(component.state || (component.ready ? "ready" : "idle")).toLowerCase(),
+      state: String(
+        component.state || (component.ready ? "ready" : "idle"),
+      ).toLowerCase(),
       detail: String(component.detail || "").trim(),
+      availableModels,
+      selectedModel: String(component.selected_model || ""),
+      modelId: String(component.model_id || ""),
+      fastModelId: String(component.fast_model_id || ""),
+      accurateModelId: String(component.accurate_model_id || ""),
+      runtimeDevice: String(component.runtime_device || ""),
+      plannedRuntimeDevice: String(component.planned_runtime_device || ""),
     };
   };
   return {
@@ -269,6 +351,17 @@ function normalizeRuntimeStatus(payload) {
     mode: String(source.mode || "idle"),
     ready: Boolean(source.ready),
     state: String(source.state || "idle"),
+    runtimeProfile: {
+      name: String(rawProfile.name || ""),
+      gpuEnabled: Boolean(rawProfile.gpu_enabled),
+      gpuVramGb: toNumberOrNull(rawProfile.gpu_vram_gb),
+      highVramThresholdGb: toNumberOrNull(rawProfile.high_vram_threshold_gb),
+      llmPrimaryModel: String(rawProfile.llm_primary_model || ""),
+      asrDevice: String(rawProfile.asr_device || ""),
+      asrFastModel: String(rawProfile.asr_fast_model || ""),
+      asrAccurateModel: String(rawProfile.asr_accurate_model || ""),
+      ttsDevice: String(rawProfile.tts_device || ""),
+    },
     components: {
       llm: normalizeComponent("llm"),
       asr: normalizeComponent("asr"),
@@ -282,7 +375,9 @@ function ttsStateLabel(state, ready) {
   if (ready) {
     return "Voice ready";
   }
-  const normalized = String(state || "idle").trim().toLowerCase();
+  const normalized = String(state || "idle")
+    .trim()
+    .toLowerCase();
   if (normalized === "downloading") {
     return "Downloading voice model";
   }
@@ -323,8 +418,43 @@ function formatWhen(value) {
   return new Date(stamp).toLocaleString();
 }
 
+function extractModelSizeBillion(modelName) {
+  const raw = String(modelName || "").trim();
+  if (!raw) {
+    return null;
+  }
+  const match = raw.match(/:(\d+(?:\.\d+)?)b\b/i);
+  if (!match) {
+    return null;
+  }
+  const parsed = Number(match[1]);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function isCoachLlmCandidate(modelName) {
+  const name = String(modelName || "")
+    .trim()
+    .toLowerCase();
+  if (!name) {
+    return false;
+  }
+  if (
+    name.includes("moondream") ||
+    name.includes("embed") ||
+    name.includes("embedding") ||
+    name.includes("vision") ||
+    name.includes("clip") ||
+    name.includes("rerank")
+  ) {
+    return false;
+  }
+  return true;
+}
+
 function getPersonaById(personaId) {
-  return PERSONA_OPTIONS.find((item) => item.id === personaId) || PERSONA_OPTIONS[0];
+  return (
+    PERSONA_OPTIONS.find((item) => item.id === personaId) || PERSONA_OPTIONS[0]
+  );
 }
 
 function AuthGate() {
@@ -333,7 +463,8 @@ function AuthGate() {
       <div className="coach-auth-card">
         <h2>Sign in first</h2>
         <p>
-          This page uses <code>bipod_token</code>. Sign in from the main app, then return here.
+          This page uses <code>bipod_token</code>. Sign in from the main app,
+          then return here.
         </p>
         <a className="coach-btn" href="/">
           Go to login
@@ -364,7 +495,11 @@ class AppErrorBoundary extends React.Component {
           <div className="coach-auth-card">
             <h2>Coach UI failed</h2>
             <p>{this.state.errorMessage}</p>
-            <button type="button" className="coach-btn" onClick={() => window.location.reload()}>
+            <button
+              type="button"
+              className="coach-btn"
+              onClick={() => window.location.reload()}
+            >
               Reload page
             </button>
           </div>
@@ -395,7 +530,8 @@ function CoachApp() {
   const [voiceProfiles, setVoiceProfiles] = useState([]);
   const [referenceClipId, setReferenceClipId] = useState("");
   const [referenceClipTitle, setReferenceClipTitle] = useState("");
-  const [profileDraftName, setProfileDraftName] = useState(DEFAULT_PROFILE_NAME);
+  const [profileDraftName, setProfileDraftName] =
+    useState(DEFAULT_PROFILE_NAME);
   const [isUploadingReference, setIsUploadingReference] = useState(false);
   const [isCreatingProfile, setIsCreatingProfile] = useState(false);
   const [deletingProfileId, setDeletingProfileId] = useState("");
@@ -416,7 +552,9 @@ function CoachApp() {
   const [isSending, setIsSending] = useState(false);
   const [isEnding, setIsEnding] = useState(false);
 
-  const [statusMessage, setStatusMessage] = useState("Pick a subject and language, then start.");
+  const [statusMessage, setStatusMessage] = useState(
+    "Pick a subject and language, then start.",
+  );
   const [recordingDuration, setRecordingDuration] = useState("00:00");
   const [errorMessage, setErrorMessage] = useState("");
   const [summary, setSummary] = useState(null);
@@ -429,7 +567,11 @@ function CoachApp() {
     status: "idle",
   });
   const [ttsStatus, setTtsStatus] = useState(() => normalizeTtsStatus(null));
-  const [runtimeStatus, setRuntimeStatus] = useState(() => normalizeRuntimeStatus(null));
+  const [runtimeStatus, setRuntimeStatus] = useState(() =>
+    normalizeRuntimeStatus(null),
+  );
+  const [preferredModel, setPreferredModel] = useState("auto");
+  const [preferredAsrModel, setPreferredAsrModel] = useState("auto");
 
   const mediaRecorderRef = useRef(null);
   const mediaStreamRef = useRef(null);
@@ -452,18 +594,186 @@ function CoachApp() {
     return customSubject.trim();
   }, [subjectChoice, customSubject]);
 
-  const selectedPersona = useMemo(() => getPersonaById(personaChoice), [personaChoice]);
-  const activePersona = useMemo(() => getPersonaById(activePersonaId), [activePersonaId]);
+  const selectedPersona = useMemo(
+    () => getPersonaById(personaChoice),
+    [personaChoice],
+  );
+  const activePersona = useMemo(
+    () => getPersonaById(activePersonaId),
+    [activePersonaId],
+  );
   const selectedBuiltinVoice = useMemo(() => {
     const parsed = parseVoiceChoice(voiceChoice);
     if (!parsed.builtinVoiceId) {
       return null;
     }
     return (
-      builtinVoices.find((voice) => String(voice.id || "").toLowerCase() === String(parsed.builtinVoiceId).toLowerCase())
-      || null
+      builtinVoices.find(
+        (voice) =>
+          String(voice.id || "").toLowerCase() ===
+          String(parsed.builtinVoiceId).toLowerCase(),
+      ) || null
     );
   }, [voiceChoice, builtinVoices]);
+  const runtimeSelection = useMemo(() => {
+    const profile = runtimeStatus.runtimeProfile || {};
+    const llm = runtimeStatus.components?.llm || {};
+    const asr = runtimeStatus.components?.asr || {};
+    const profileName = String(profile.name || "auto").trim() || "auto";
+    const llmModel =
+      String(
+        llm.selectedModel || profile.llmPrimaryModel || "unknown",
+      ).trim() || "unknown";
+    const asrModel =
+      String(
+        asr.fastModelId || asr.modelId || profile.asrFastModel || "unknown",
+      ).trim() || "unknown";
+    const asrDevice =
+      String(
+        asr.runtimeDevice ||
+          asr.plannedRuntimeDevice ||
+          profile.asrDevice ||
+          "unknown",
+      ).trim() || "unknown";
+    const gpuEnabled = Boolean(profile.gpuEnabled);
+    const gpuVramGb =
+      typeof profile.gpuVramGb === "number" ? profile.gpuVramGb : null;
+    const hardwareLabel = gpuEnabled
+      ? gpuVramGb != null
+        ? `${gpuVramGb.toFixed(2)} GB VRAM`
+        : "GPU enabled"
+      : "CPU only";
+    return {
+      profileName,
+      hardwareLabel,
+      llmModel,
+      asrModel,
+      asrDevice,
+    };
+  }, [runtimeStatus]);
+  const llmModelOptions = useMemo(() => {
+    const seen = new Set();
+    const ordered = [];
+    const currentRuntimeModel = String(runtimeSelection.llmModel || "").trim();
+    const available = Array.isArray(
+      runtimeStatus.components?.llm?.availableModels,
+    )
+      ? runtimeStatus.components.llm.availableModels
+      : [];
+    for (const value of [currentRuntimeModel, ...available]) {
+      const normalized = String(value || "").trim();
+      if (!normalized || seen.has(normalized)) {
+        continue;
+      }
+      if (
+        normalized !== currentRuntimeModel &&
+        !isCoachLlmCandidate(normalized)
+      ) {
+        continue;
+      }
+      seen.add(normalized);
+      ordered.push(normalized);
+    }
+    return ordered;
+  }, [
+    runtimeSelection.llmModel,
+    runtimeStatus.components?.llm?.availableModels,
+  ]);
+  const asrPreferenceOptions = useMemo(() => {
+    const fastModel =
+      String(
+        runtimeStatus.components?.asr?.fastModelId ||
+          runtimeStatus.runtimeProfile?.asrFastModel ||
+          "medium",
+      ).trim() || "medium";
+    const accurateModel =
+      String(
+        runtimeStatus.components?.asr?.accurateModelId ||
+          runtimeStatus.runtimeProfile?.asrAccurateModel ||
+          fastModel,
+      ).trim() || fastModel;
+    const options = [
+      {
+        value: "auto",
+        label:
+          fastModel === accurateModel
+            ? `Auto (${fastModel})`
+            : `Auto (${fastModel} with accurate fallback)`,
+      },
+      { value: "fast", label: `Fast (${fastModel})` },
+    ];
+    if (accurateModel !== fastModel) {
+      options.push({ value: "accurate", label: `Accurate (${accurateModel})` });
+    }
+    return options;
+  }, [
+    runtimeStatus.components?.asr?.fastModelId,
+    runtimeStatus.components?.asr?.accurateModelId,
+    runtimeStatus.runtimeProfile?.asrFastModel,
+    runtimeStatus.runtimeProfile?.asrAccurateModel,
+  ]);
+  const performanceWarning = useMemo(() => {
+    const profile = runtimeStatus.runtimeProfile || {};
+    const warnings = [];
+    const selectedLlm = String(preferredModel || "").trim();
+    const selectedAsr = String(preferredAsrModel || "")
+      .trim()
+      .toLowerCase();
+    const defaultLlm = String(
+      profile.llmPrimaryModel || runtimeSelection.llmModel || "",
+    ).trim();
+    const selectedLlmSize =
+      selectedLlm && selectedLlm !== "auto"
+        ? extractModelSizeBillion(selectedLlm)
+        : null;
+    const defaultLlmSize = defaultLlm
+      ? extractModelSizeBillion(defaultLlm)
+      : null;
+    const profileName = String(profile.name || "")
+      .trim()
+      .toLowerCase();
+    const asrDevice = String(
+      runtimeStatus.components?.asr?.plannedRuntimeDevice ||
+        runtimeStatus.components?.asr?.runtimeDevice ||
+        profile.asrDevice ||
+        "cpu",
+    )
+      .trim()
+      .toLowerCase();
+
+    if (
+      selectedLlm &&
+      selectedLlm !== "auto" &&
+      defaultLlm &&
+      selectedLlm !== defaultLlm
+    ) {
+      if (
+        defaultLlmSize != null &&
+        selectedLlmSize != null &&
+        selectedLlmSize > defaultLlmSize
+      ) {
+        warnings.push(
+          `LLM ${selectedLlm} is heavier than the hardware default (${defaultLlm}).`,
+        );
+      } else if (profileName === "cpu") {
+        warnings.push(`LLM ${selectedLlm} may run slower on CPU-only profile.`);
+      }
+    }
+    if (selectedAsr === "accurate") {
+      warnings.push(
+        `Accurate ASR prioritizes quality and can increase response latency${asrDevice === "cpu" ? " on CPU hardware" : ""}.`,
+      );
+    }
+    if (!warnings.length) {
+      return "";
+    }
+    return `${warnings.join(" ")} Performance and speed may drop.`;
+  }, [
+    preferredModel,
+    preferredAsrModel,
+    runtimeStatus,
+    runtimeSelection.llmModel,
+  ]);
 
   const voiceStageSnapshot = useMemo(() => {
     const stageText = String(voiceStage.text || "").trim();
@@ -475,7 +785,9 @@ function CoachApp() {
       };
     }
 
-    const userText = String(currentTurn?.transcript || currentTurn?.partialTranscript || "").trim();
+    const userText = String(
+      currentTurn?.transcript || currentTurn?.partialTranscript || "",
+    ).trim();
     if (userText) {
       return {
         speaker: "user",
@@ -512,7 +824,9 @@ function CoachApp() {
     async function fetchIdentity() {
       setAuthState("checking");
       try {
-        const response = await fetch("/api/v1/auth/me", { headers: buildAuthHeaders(token) });
+        const response = await fetch("/api/v1/auth/me", {
+          headers: buildAuthHeaders(token),
+        });
         if (!response.ok) {
           if (!cancelled) {
             if (response.status === 401) {
@@ -568,8 +882,16 @@ function CoachApp() {
       }
       const shouldWarmTts = Boolean(sessionId) && viewMode === "voice";
       await refreshTtsStatus({ warm: shouldWarmTts, silent: true });
-      const runtimeMode = sessionId ? (viewMode === "voice" ? "voice" : "text") : "idle";
-      await refreshRuntimeStatus({ warm: false, mode: runtimeMode, silent: true });
+      const runtimeMode = sessionId
+        ? viewMode === "voice"
+          ? "voice"
+          : "text"
+        : "idle";
+      await refreshRuntimeStatus({
+        warm: false,
+        mode: runtimeMode,
+        silent: true,
+      });
     };
     void poll();
     const intervalId = window.setInterval(() => {
@@ -591,6 +913,16 @@ function CoachApp() {
   }, [sessionId, viewMode, token, authState]);
 
   useEffect(() => {
+    if (preferredModel === "auto") {
+      return;
+    }
+    if (llmModelOptions.includes(preferredModel)) {
+      return;
+    }
+    setPreferredModel("auto");
+  }, [preferredModel, llmModelOptions]);
+
+  useEffect(() => {
     activeLanguageRef.current = activeLanguage || languageChoice || "English";
   }, [activeLanguage, languageChoice]);
 
@@ -606,8 +938,12 @@ function CoachApp() {
     if (!PERSONA_OPTIONS.some((item) => item.id === targetPersonaId)) {
       return;
     }
-    setPersonaChoice((current) => (current === targetPersonaId ? current : targetPersonaId));
-    setActivePersonaId((current) => (current === targetPersonaId ? current : targetPersonaId));
+    setPersonaChoice((current) =>
+      current === targetPersonaId ? current : targetPersonaId,
+    );
+    setActivePersonaId((current) =>
+      current === targetPersonaId ? current : targetPersonaId,
+    );
   }, [voiceChoice]);
 
   useEffect(() => {
@@ -647,13 +983,11 @@ function CoachApp() {
       if (!mapped.length) {
         setVoiceChoice((current) => {
           if (
-            current
-            && (
-              current.startsWith("server:")
-              || current.startsWith("profile:")
-              || current.startsWith("builtin:")
-              || current === "session_clone"
-            )
+            current &&
+            (current.startsWith("server:") ||
+              current.startsWith("profile:") ||
+              current.startsWith("builtin:") ||
+              current === "session_clone")
           ) {
             return current;
           }
@@ -663,13 +997,11 @@ function CoachApp() {
       }
       setVoiceChoice((current) => {
         if (
-          current
-          && (
-            current.startsWith("server:")
-            || current.startsWith("profile:")
-            || current.startsWith("builtin:")
-            || current === "session_clone"
-          )
+          current &&
+          (current.startsWith("server:") ||
+            current.startsWith("profile:") ||
+            current.startsWith("builtin:") ||
+            current === "session_clone")
         ) {
           return current;
         }
@@ -719,7 +1051,11 @@ function CoachApp() {
         return;
       }
       const targetTag = String(event.target?.tagName || "").toLowerCase();
-      if (targetTag === "input" || targetTag === "textarea" || targetTag === "select") {
+      if (
+        targetTag === "input" ||
+        targetTag === "textarea" ||
+        targetTag === "select"
+      ) {
         return;
       }
       event.preventDefault();
@@ -764,19 +1100,30 @@ function CoachApp() {
       return;
     }
     try {
-      const payload = await apiFetchJson("/api/v1/coach/languages/supported", token);
+      const payload = await apiFetchJson(
+        "/api/v1/coach/languages/supported",
+        token,
+      );
       if (!Array.isArray(payload) || !payload.length) {
         return;
       }
-      const selectable = payload.filter((item) => Boolean(item?.selectable) && item?.name);
+      const selectable = payload.filter(
+        (item) => Boolean(item?.selectable) && item?.name,
+      );
       setSupportedLanguages(selectable);
       setLanguageChoice((current) => {
-        const found = selectable.find((item) => String(item.name) === String(current));
+        const found = selectable.find(
+          (item) => String(item.name) === String(current),
+        );
         if (found) {
           return current;
         }
-        const defaultItem = selectable.find((item) => Boolean(item?.is_default));
-        return String(defaultItem?.name || selectable[0]?.name || current || "English");
+        const defaultItem = selectable.find((item) =>
+          Boolean(item?.is_default),
+        );
+        return String(
+          defaultItem?.name || selectable[0]?.name || current || "English",
+        );
       });
     } catch {
       // Keep static fallback list.
@@ -794,20 +1141,33 @@ function CoachApp() {
       }
       const available = payload.filter((item) => Boolean(item?.is_available));
       setBuiltinVoices(available);
-      const anby = available.find((item) => String(item?.id || "").toLowerCase() === "anby");
+      const anby = available.find(
+        (item) => String(item?.id || "").toLowerCase() === "anby",
+      );
       setVoiceChoice((current) => {
         const currentChoice = String(current || "");
-        const builtinChoices = new Set(available.map((item) => String(item.choice_id || `builtin:${item.id}`)));
+        const builtinChoices = new Set(
+          available.map((item) =>
+            String(item.choice_id || `builtin:${item.id}`),
+          ),
+        );
         if (builtinChoices.has(currentChoice)) {
           return currentChoice;
         }
-        if (currentChoice.startsWith("server:") || currentChoice === "session_clone" || currentChoice.startsWith("profile:")) {
+        if (
+          currentChoice.startsWith("server:") ||
+          currentChoice === "session_clone" ||
+          currentChoice.startsWith("profile:")
+        ) {
           if (currentChoice !== DEFAULT_SERVER_VOICE) {
             return currentChoice;
           }
           return anby?.choice_id || currentChoice;
         }
-        if (currentChoice && voiceOptions.some((voice) => voice.name === currentChoice)) {
+        if (
+          currentChoice &&
+          voiceOptions.some((voice) => voice.name === currentChoice)
+        ) {
           return currentChoice;
         }
         return anby?.choice_id || DEFAULT_SERVER_VOICE;
@@ -822,7 +1182,10 @@ function CoachApp() {
       return;
     }
     try {
-      const payload = await apiFetchJson("/api/v1/coach/voices/profiles", token);
+      const payload = await apiFetchJson(
+        "/api/v1/coach/voices/profiles",
+        token,
+      );
       if (Array.isArray(payload)) {
         setVoiceProfiles(payload);
       }
@@ -835,7 +1198,9 @@ function CoachApp() {
     if (!token) {
       return null;
     }
-    const path = warm ? "/api/v1/coach/tts/status?warm=true" : "/api/v1/coach/tts/status";
+    const path = warm
+      ? "/api/v1/coach/tts/status?warm=true"
+      : "/api/v1/coach/tts/status";
     try {
       const payload = await apiFetchJson(path, token);
       const normalized = normalizeTtsStatus(payload);
@@ -858,7 +1223,11 @@ function CoachApp() {
     }
   }
 
-  async function refreshRuntimeStatus({ warm = false, mode = "voice", silent = true } = {}) {
+  async function refreshRuntimeStatus({
+    warm = false,
+    mode = "voice",
+    silent = true,
+  } = {}) {
     if (!token) {
       return null;
     }
@@ -888,11 +1257,15 @@ function CoachApp() {
       return null;
     }
     try {
-      const payload = await apiFetchJson("/api/v1/coach/runtime/preload", token, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mode }),
-      });
+      const payload = await apiFetchJson(
+        "/api/v1/coach/runtime/preload",
+        token,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ mode }),
+        },
+      );
       setRuntimeStatus(normalizeRuntimeStatus(payload));
       return payload;
     } catch (error) {
@@ -904,9 +1277,13 @@ function CoachApp() {
   }
 
   function hydrateSession(record, loadedTurns = []) {
-    const subject = String(record?.focus_area || record?.title || "Conversation").trim() || "Conversation";
-    const language = String(record?.target_language || "English").trim() || "English";
+    const subject =
+      String(record?.focus_area || record?.title || "Conversation").trim() ||
+      "Conversation";
+    const language =
+      String(record?.target_language || "English").trim() || "English";
     const status = String(record?.status || "active").trim() || "active";
+    const linkedModelId = String(record?.model_id || "").trim();
 
     setSessionId(String(record?.id || ""));
     setActiveSubject(subject);
@@ -921,6 +1298,8 @@ function CoachApp() {
         setVoiceChoice(`profile:${linkedProfileId}`);
       }
     }
+    setPreferredModel(linkedModelId || "auto");
+    setPreferredAsrModel("auto");
     setConversationEnded(status === "completed");
     setShowSessionSettings(false);
     setStarterQuestion(buildStarterQuestion(subject, language));
@@ -951,8 +1330,13 @@ function CoachApp() {
     stopRecording(true);
 
     try {
-      const rawTurns = await apiFetchJson(`/api/v1/coach/sessions/${record.id}/turns`, token);
-      const mappedTurns = Array.isArray(rawTurns) ? rawTurns.map(mapStoredTurn) : [];
+      const rawTurns = await apiFetchJson(
+        `/api/v1/coach/sessions/${record.id}/turns`,
+        token,
+      );
+      const mappedTurns = Array.isArray(rawTurns)
+        ? rawTurns.map(mapStoredTurn)
+        : [];
       hydrateSession(record, mappedTurns);
     } catch (error) {
       setErrorMessage(error?.message || "Could not load this session.");
@@ -971,7 +1355,9 @@ function CoachApp() {
     setErrorMessage("");
     setDeletingSessionId(id);
     try {
-      await apiFetchJson(`/api/v1/coach/sessions/${id}`, token, { method: "DELETE" });
+      await apiFetchJson(`/api/v1/coach/sessions/${id}`, token, {
+        method: "DELETE",
+      });
       setSessions((prev) => prev.filter((item) => item.id !== id));
       if (id === sessionId) {
         startAnotherConversation();
@@ -993,7 +1379,10 @@ function CoachApp() {
       const formData = new FormData();
       formData.append("file", file, file.name || "voice-sample.wav");
       formData.append("title", file.name || "Voice sample");
-      formData.append("language", activeLanguage || languageChoice || "English");
+      formData.append(
+        "language",
+        activeLanguage || languageChoice || "English",
+      );
       const response = await fetch("/api/v1/coach/voices/reference", {
         method: "POST",
         headers: { Authorization: `Bearer ${token}` },
@@ -1005,9 +1394,13 @@ function CoachApp() {
       }
       const payload = await response.json();
       setReferenceClipId(String(payload?.id || ""));
-      setReferenceClipTitle(String(payload?.title || file.name || "Voice sample"));
+      setReferenceClipTitle(
+        String(payload?.title || file.name || "Voice sample"),
+      );
       setVoiceChoice("session_clone");
-      setStatusMessage("Voice sample uploaded. Save it as a profile or use it for this session.");
+      setStatusMessage(
+        "Voice sample uploaded. Save it as a profile or use it for this session.",
+      );
     } catch (error) {
       setErrorMessage(error?.message || "Could not upload voice sample.");
     } finally {
@@ -1027,16 +1420,23 @@ function CoachApp() {
     setErrorMessage("");
     setIsCreatingProfile(true);
     try {
-      const payload = await apiFetchJson("/api/v1/coach/voices/profiles", token, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          name: trimmedName,
-          reference_clip_id: referenceClipId,
-          language: activeLanguage || languageChoice || "English",
-        }),
-      });
-      setVoiceProfiles((prev) => [payload, ...prev.filter((item) => item.id !== payload.id)]);
+      const payload = await apiFetchJson(
+        "/api/v1/coach/voices/profiles",
+        token,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            name: trimmedName,
+            reference_clip_id: referenceClipId,
+            language: activeLanguage || languageChoice || "English",
+          }),
+        },
+      );
+      setVoiceProfiles((prev) => [
+        payload,
+        ...prev.filter((item) => item.id !== payload.id),
+      ]);
       setVoiceChoice(`profile:${payload.id}`);
       setProfileDraftName(DEFAULT_PROFILE_NAME);
       setStatusMessage(`Voice profile "${payload.name}" is ready.`);
@@ -1055,7 +1455,9 @@ function CoachApp() {
     setErrorMessage("");
     setDeletingProfileId(id);
     try {
-      await apiFetchJson(`/api/v1/coach/voices/profiles/${id}`, token, { method: "DELETE" });
+      await apiFetchJson(`/api/v1/coach/voices/profiles/${id}`, token, {
+        method: "DELETE",
+      });
       setVoiceProfiles((prev) => prev.filter((item) => item.id !== id));
       if (voiceChoice === `profile:${id}`) {
         setVoiceChoice(DEFAULT_SERVER_VOICE);
@@ -1088,7 +1490,11 @@ function CoachApp() {
 
     const parsedVoice = parseVoiceChoice(voiceChoice);
     const voicePreset = parsedVoice.voicePreset || "default";
-    const language = activeLanguageRef.current || activeLanguage || languageChoice || "English";
+    const language =
+      activeLanguageRef.current ||
+      activeLanguage ||
+      languageChoice ||
+      "English";
     const persona = activePersona?.prompt || selectedPersona?.prompt || "";
     if (parsedVoice.voiceMode === "cloned_session" && !referenceClipId) {
       throw new Error("Upload a reference voice sample first.");
@@ -1101,7 +1507,10 @@ function CoachApp() {
       tts_provider: "cosyvoice",
       voice_mode: parsedVoice.voiceMode,
       voice_profile_id: parsedVoice.voiceProfileId || null,
-      reference_clip_id: parsedVoice.voiceMode === "cloned_session" ? referenceClipId || null : null,
+      reference_clip_id:
+        parsedVoice.voiceMode === "cloned_session"
+          ? referenceClipId || null
+          : null,
       builtin_voice_id: parsedVoice.builtinVoiceId || null,
     };
 
@@ -1117,7 +1526,12 @@ function CoachApp() {
       if (raw) {
         try {
           const parsed = JSON.parse(raw);
-          if (parsed && typeof parsed === "object" && typeof parsed.detail === "string" && parsed.detail.trim()) {
+          if (
+            parsed &&
+            typeof parsed === "object" &&
+            typeof parsed.detail === "string" &&
+            parsed.detail.trim()
+          ) {
             detail = parsed.detail.trim();
           }
         } catch {
@@ -1172,15 +1586,22 @@ function CoachApp() {
     });
 
     const parsedVoice = parseVoiceChoice(voiceChoice);
-    const shouldUseServer = !parsedVoice.useBrowserVoice || parsedVoice.voiceMode !== "preset";
-    if (!shouldUseServer && window.speechSynthesis && window.SpeechSynthesisUtterance) {
+    const shouldUseServer =
+      !parsedVoice.useBrowserVoice || parsedVoice.voiceMode !== "preset";
+    if (
+      !shouldUseServer &&
+      window.speechSynthesis &&
+      window.SpeechSynthesisUtterance
+    ) {
       try {
         const utterance = new window.SpeechSynthesisUtterance(content);
         const activeLang = activeLanguageRef.current || "English";
         utterance.lang = LANGUAGE_TO_BCP47[activeLang] || "en-US";
 
         const voices = window.speechSynthesis.getVoices() || [];
-        const selectedVoice = voices.find((voice) => voice.name === voiceChoice);
+        const selectedVoice = voices.find(
+          (voice) => voice.name === voiceChoice,
+        );
         if (selectedVoice) {
           utterance.voice = selectedVoice;
         }
@@ -1224,7 +1645,10 @@ function CoachApp() {
   }
 
   function stopRecording(force = false) {
-    if (!mediaRecorderRef.current || mediaRecorderRef.current.state === "inactive") {
+    if (
+      !mediaRecorderRef.current ||
+      mediaRecorderRef.current.state === "inactive"
+    ) {
       releaseStream();
       setIsRecording(false);
       return;
@@ -1255,9 +1679,12 @@ function CoachApp() {
     setErrorMessage("");
     setSummary(null);
     const parsedVoice = parseVoiceChoice(voiceChoice);
-    const linkedProfileId = parsedVoice.voiceMode === "cloned_profile"
-      ? parsedVoice.voiceProfileId
-      : (parsedVoice.builtinVoiceId ? `builtin:${parsedVoice.builtinVoiceId}` : null);
+    const linkedProfileId =
+      parsedVoice.voiceMode === "cloned_profile"
+        ? parsedVoice.voiceProfileId
+        : parsedVoice.builtinVoiceId
+          ? `builtin:${parsedVoice.builtinVoiceId}`
+          : null;
 
     try {
       const created = await apiFetchJson("/api/v1/coach/sessions", token, {
@@ -1268,6 +1695,7 @@ function CoachApp() {
           target_language: languageChoice,
           cefr_level: "B1",
           focus_area: selectedSubject,
+          model_id: preferredModel !== "auto" ? preferredModel : null,
           voice_profile_id: linkedProfileId,
         }),
       });
@@ -1278,10 +1706,15 @@ function CoachApp() {
         target_language: created?.target_language || languageChoice,
       };
 
-      setSessions((prev) => [sessionRecord, ...prev.filter((item) => item.id !== sessionRecord.id)]);
+      setSessions((prev) => [
+        sessionRecord,
+        ...prev.filter((item) => item.id !== sessionRecord.id),
+      ]);
       hydrateSession(sessionRecord, []);
       void preloadCoachRuntime("voice", { silent: true });
-      setStatusMessage(`Conversation started on ${selectedSubject} in ${languageChoice}. Click the mic to start and click again to stop.`);
+      setStatusMessage(
+        `Conversation started on ${selectedSubject} in ${languageChoice}. Click the mic to start and click again to stop.`,
+      );
     } catch (error) {
       setErrorMessage(error?.message || "Could not start conversation.");
     }
@@ -1317,10 +1750,19 @@ function CoachApp() {
   }
 
   async function startRecording() {
-    if (!sessionId || conversationEnded || isRecording || isSending || isEnding) {
+    if (
+      !sessionId ||
+      conversationEnded ||
+      isRecording ||
+      isSending ||
+      isEnding
+    ) {
       return;
     }
-    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
+    if (
+      !navigator.mediaDevices?.getUserMedia ||
+      typeof MediaRecorder === "undefined"
+    ) {
       setErrorMessage("This browser does not support audio capture.");
       return;
     }
@@ -1329,9 +1771,19 @@ function CoachApp() {
 
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const mimeCandidates = ["audio/webm;codecs=opus", "audio/webm", "audio/ogg;codecs=opus", "audio/mp4"];
-      const mimeType = mimeCandidates.find((candidate) => MediaRecorder.isTypeSupported(candidate)) || "";
-      const recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
+      const mimeCandidates = [
+        "audio/webm;codecs=opus",
+        "audio/webm",
+        "audio/ogg;codecs=opus",
+        "audio/mp4",
+      ];
+      const mimeType =
+        mimeCandidates.find((candidate) =>
+          MediaRecorder.isTypeSupported(candidate),
+        ) || "";
+      const recorder = mimeType
+        ? new MediaRecorder(stream, { mimeType })
+        : new MediaRecorder(stream);
 
       mediaRecorderRef.current = recorder;
       mediaStreamRef.current = stream;
@@ -1352,7 +1804,9 @@ function CoachApp() {
       };
 
       recorder.onstop = async () => {
-        const audioBlob = new Blob(chunksRef.current, { type: recorder.mimeType || "audio/webm" });
+        const audioBlob = new Blob(chunksRef.current, {
+          type: recorder.mimeType || "audio/webm",
+        });
         releaseStream();
         setIsRecording(false);
         if (!isStoppingRef.current) {
@@ -1396,10 +1850,24 @@ function CoachApp() {
 
     try {
       const formData = new FormData();
-      formData.append("audio", audioBlob, `coach-${currentTurnRef.current.id}.webm`);
-      formData.append("file", audioBlob, `coach-${currentTurnRef.current.id}.webm`);
+      formData.append(
+        "audio",
+        audioBlob,
+        `coach-${currentTurnRef.current.id}.webm`,
+      );
+      formData.append(
+        "file",
+        audioBlob,
+        `coach-${currentTurnRef.current.id}.webm`,
+      );
       formData.append("session_id", sessionId);
       formData.append("persona_style", activePersona.prompt);
+      if (preferredModel !== "auto") {
+        formData.append("preferred_model", preferredModel);
+      }
+      if (preferredAsrModel !== "auto") {
+        formData.append("preferred_asr_model", preferredAsrModel);
+      }
 
       const response = await fetch("/api/v1/coach/turns/stream", {
         method: "POST",
@@ -1410,7 +1878,9 @@ function CoachApp() {
 
       if (!response.ok || !response.body) {
         const text = await response.text().catch(() => "");
-        throw new Error(text || `Coach stream failed with status ${response.status}`);
+        throw new Error(
+          text || `Coach stream failed with status ${response.status}`,
+        );
       }
 
       const reader = response.body.getReader();
@@ -1461,7 +1931,9 @@ function CoachApp() {
 
           if (eventType === "stt_final") {
             const finalText = eventText(event);
-            const confidenceBand = String(event?.asr_confidence_band || "").toLowerCase();
+            const confidenceBand = String(
+              event?.asr_confidence_band || "",
+            ).toLowerCase();
             updateDraft((draft) => {
               draft.transcript = finalText || draft.transcript;
               draft.partialTranscript = "";
@@ -1478,7 +1950,9 @@ function CoachApp() {
               });
             }
             if (confidenceBand === "low") {
-              setStatusMessage("ASR is uncertain. The coach may ask for confirmation.");
+              setStatusMessage(
+                "ASR is uncertain. The coach may ask for confirmation.",
+              );
             }
             continue;
           }
@@ -1519,7 +1993,9 @@ function CoachApp() {
                 return draft;
               }
               const valueRaw = Number(rawValue);
-              draft.score = Number.isNaN(valueRaw) ? null : Math.max(0, Math.min(100, valueRaw));
+              draft.score = Number.isNaN(valueRaw)
+                ? null
+                : Math.max(0, Math.min(100, valueRaw));
               return draft;
             });
             continue;
@@ -1538,7 +2014,10 @@ function CoachApp() {
 
       const finalTurn = {
         ...currentTurnRef.current,
-        transcript: currentTurnRef.current?.transcript || currentTurnRef.current?.partialTranscript || "",
+        transcript:
+          currentTurnRef.current?.transcript ||
+          currentTurnRef.current?.partialTranscript ||
+          "",
         endedAt: new Date().toISOString(),
       };
       setTurns((prev) => [...prev, finalTurn]);
@@ -1624,6 +2103,7 @@ function CoachApp() {
         body: JSON.stringify({
           session_id: sessionId,
           text: message,
+          preferred_model: preferredModel !== "auto" ? preferredModel : null,
           persona_style: activePersona.prompt,
         }),
       });
@@ -1693,12 +2173,20 @@ function CoachApp() {
     setErrorMessage("");
 
     try {
-      const result = await apiFetchJson(`/api/v1/coach/sessions/${sessionId}/end`, token, { method: "POST" });
+      const result = await apiFetchJson(
+        `/api/v1/coach/sessions/${sessionId}/end`,
+        token,
+        { method: "POST" },
+      );
       setSummary(result);
       setConversationEnded(true);
       setActiveSessionStatus("completed");
       setStatusMessage("Conversation ended. Review your score and feedback.");
-      setSessions((prev) => prev.map((item) => (item.id === sessionId ? { ...item, status: "completed" } : item)));
+      setSessions((prev) =>
+        prev.map((item) =>
+          item.id === sessionId ? { ...item, status: "completed" } : item,
+        ),
+      );
     } catch (error) {
       setErrorMessage(error?.message || "Could not end conversation.");
     } finally {
@@ -1727,8 +2215,14 @@ function CoachApp() {
     setReferenceClipId("");
     setReferenceClipTitle("");
     setProfileDraftName(DEFAULT_PROFILE_NAME);
+    setPreferredModel("auto");
+    setPreferredAsrModel("auto");
     setVoiceChoice((current) => {
-      const builtinIds = new Set(builtinVoices.map((voice) => String(voice.choice_id || `builtin:${voice.id}`)));
+      const builtinIds = new Set(
+        builtinVoices.map((voice) =>
+          String(voice.choice_id || `builtin:${voice.id}`),
+        ),
+      );
       if (builtinIds.has(DEFAULT_BUILTIN_VOICE_CHOICE)) {
         return DEFAULT_BUILTIN_VOICE_CHOICE;
       }
@@ -1751,18 +2245,26 @@ function CoachApp() {
   }
 
   const ttsBadgeClass = `coach-tts-badge ${ttsStatus.ready ? "ready" : ""} state-${ttsStatus.state || "idle"}`;
-  const aiSpeakingNow = voiceStageSnapshot.speaker === "ai" && voiceStageSnapshot.status === "speaking";
+  const aiSpeakingNow =
+    voiceStageSnapshot.speaker === "ai" &&
+    voiceStageSnapshot.status === "speaking";
 
   return (
     <div className="coach-shell">
       <aside className="coach-sidebar">
         <div className="coach-sidebar-top">
           <h2>Sessions</h2>
-          <button type="button" className="coach-btn coach-btn-small" onClick={startAnotherConversation}>
+          <button
+            type="button"
+            className="coach-btn coach-btn-small"
+            onClick={startAnotherConversation}
+          >
             New session
           </button>
         </div>
-        {isLoadingSessions ? <p className="coach-side-note">Loading history...</p> : null}
+        {isLoadingSessions ? (
+          <p className="coach-side-note">Loading history...</p>
+        ) : null}
         <div className="coach-session-list">
           {sessions.length ? (
             sessions.map((item) => {
@@ -1770,15 +2272,26 @@ function CoachApp() {
               const when = formatWhen(item.updated_at || item.created_at);
               const isDeleting = deletingSessionId === item.id;
               return (
-                <div key={item.id} className={`coach-session-item ${isActive ? "active" : ""}`}>
-                  <button type="button" className="coach-session-open" onClick={() => openSession(item)}>
-                    <div className="coach-session-title">{item.focus_area || item.title || "Untitled session"}</div>
+                <div
+                  key={item.id}
+                  className={`coach-session-item ${isActive ? "active" : ""}`}
+                >
+                  <button
+                    type="button"
+                    className="coach-session-open"
+                    onClick={() => openSession(item)}
+                  >
+                    <div className="coach-session-title">
+                      {item.focus_area || item.title || "Untitled session"}
+                    </div>
                     <div className="coach-session-meta">
                       <span>{item.target_language || "English"}</span>
                       <span>{item.turn_count || 0} turns</span>
                       <span>{String(item.status || "active")}</span>
                     </div>
-                    {when ? <div className="coach-session-time">{when}</div> : null}
+                    {when ? (
+                      <div className="coach-session-time">{when}</div>
+                    ) : null}
                   </button>
                   <div className="coach-session-actions">
                     <button
@@ -1789,7 +2302,9 @@ function CoachApp() {
                       title="Delete session"
                       disabled={isDeleting}
                     >
-                      <span className="material-symbols-rounded">{isDeleting ? "hourglass_top" : "delete"}</span>
+                      <span className="material-symbols-rounded">
+                        {isDeleting ? "hourglass_top" : "delete"}
+                      </span>
                     </button>
                   </div>
                 </div>
@@ -1803,7 +2318,11 @@ function CoachApp() {
 
       <main className="coach-main">
         <div className="coach-top">
-          <button type="button" className="coach-back-btn" onClick={() => (window.location.href = "/")}>
+          <button
+            type="button"
+            className="coach-back-btn"
+            onClick={() => (window.location.href = "/")}
+          >
             <span className="material-symbols-rounded">arrow_back</span>
             Back to chat
           </button>
@@ -1812,24 +2331,62 @@ function CoachApp() {
             <div className={ttsBadgeClass} title={ttsStatus.detail}>
               <span className="coach-tts-badge-dot" />
               <div className="coach-tts-badge-text">
-                <strong>{ttsStateLabel(ttsStatus.state, ttsStatus.ready)}</strong>
+                <strong>
+                  {ttsStateLabel(ttsStatus.state, ttsStatus.ready)}
+                </strong>
                 <span>{ttsStatus.detail}</span>
               </div>
             </div>
           </div>
           <p>{statusMessage}</p>
           <div className="coach-runtime-row" aria-label="Runtime readiness">
-            <span className={`coach-runtime-chip ${runtimeStatus.components.llm.ready ? "ready" : ""}`}>
-              LLM {runtimeStatus.components.llm.ready ? "ready" : runtimeStatus.components.llm.state}
+            <span
+              className={`coach-runtime-chip ${runtimeStatus.components.llm.ready ? "ready" : ""}`}
+            >
+              LLM{" "}
+              {runtimeStatus.components.llm.ready
+                ? "ready"
+                : runtimeStatus.components.llm.state}
             </span>
-            <span className={`coach-runtime-chip ${runtimeStatus.components.asr.ready ? "ready" : ""}`}>
-              ASR {runtimeStatus.components.asr.ready ? "ready" : runtimeStatus.components.asr.state}
+            <span
+              className={`coach-runtime-chip ${runtimeStatus.components.asr.ready ? "ready" : ""}`}
+            >
+              ASR{" "}
+              {runtimeStatus.components.asr.ready
+                ? "ready"
+                : runtimeStatus.components.asr.state}
             </span>
-            <span className={`coach-runtime-chip ${runtimeStatus.components.tts.ready ? "ready" : ""}`}>
-              TTS {runtimeStatus.components.tts.ready ? "ready" : runtimeStatus.components.tts.state}
+            <span
+              className={`coach-runtime-chip ${runtimeStatus.components.tts.ready ? "ready" : ""}`}
+            >
+              TTS{" "}
+              {runtimeStatus.components.tts.ready
+                ? "ready"
+                : runtimeStatus.components.tts.state}
             </span>
-            <span className={`coach-runtime-chip ${runtimeStatus.components.languagetool.ready ? "ready" : ""}`}>
-              LT {runtimeStatus.components.languagetool.ready ? "ready" : runtimeStatus.components.languagetool.state}
+            <span
+              className={`coach-runtime-chip ${runtimeStatus.components.languagetool.ready ? "ready" : ""}`}
+            >
+              LT{" "}
+              {runtimeStatus.components.languagetool.ready
+                ? "ready"
+                : runtimeStatus.components.languagetool.state}
+            </span>
+          </div>
+          <div
+            className="coach-runtime-selection"
+            aria-label="Hardware-selected runtime models"
+          >
+            <span>
+              <strong>Profile:</strong> {runtimeSelection.profileName} (
+              {runtimeSelection.hardwareLabel})
+            </span>
+            <span>
+              <strong>LLM:</strong> {runtimeSelection.llmModel}
+            </span>
+            <span>
+              <strong>ASR:</strong> {runtimeSelection.asrModel} on{" "}
+              {runtimeSelection.asrDevice}
             </span>
           </div>
         </div>
@@ -1837,7 +2394,11 @@ function CoachApp() {
         {!sessionId ? (
           <section className="coach-setup-card">
             <label htmlFor="subject-select">Subject</label>
-            <select id="subject-select" value={subjectChoice} onChange={(event) => setSubjectChoice(event.target.value)}>
+            <select
+              id="subject-select"
+              value={subjectChoice}
+              onChange={(event) => setSubjectChoice(event.target.value)}
+            >
               {SUBJECT_OPTIONS.map((subject) => (
                 <option key={subject} value={subject}>
                   {subject}
@@ -1847,6 +2408,7 @@ function CoachApp() {
 
             {subjectChoice === "Custom" ? (
               <input
+                className="coach-custom-subject"
                 type="text"
                 placeholder="Type your subject"
                 value={customSubject}
@@ -1856,8 +2418,15 @@ function CoachApp() {
             ) : null}
 
             <label htmlFor="language-select">Language (supported)</label>
-            <select id="language-select" value={languageChoice} onChange={(event) => setLanguageChoice(event.target.value)}>
-              {(supportedLanguages.length ? supportedLanguages.map((item) => String(item.name || "")) : LANGUAGE_OPTIONS).map((language) => (
+            <select
+              id="language-select"
+              value={languageChoice}
+              onChange={(event) => setLanguageChoice(event.target.value)}
+            >
+              {(supportedLanguages.length
+                ? supportedLanguages.map((item) => String(item.name || ""))
+                : LANGUAGE_OPTIONS
+              ).map((language) => (
                 <option key={language} value={language}>
                   {language}
                 </option>
@@ -1865,7 +2434,11 @@ function CoachApp() {
             </select>
 
             <label htmlFor="persona-select">AI personality</label>
-            <select id="persona-select" value={personaChoice} onChange={(event) => setPersonaChoice(event.target.value)}>
+            <select
+              id="persona-select"
+              value={personaChoice}
+              onChange={(event) => setPersonaChoice(event.target.value)}
+            >
               {PERSONA_OPTIONS.map((persona) => (
                 <option key={persona.id} value={persona.id}>
                   {persona.label}
@@ -1873,10 +2446,48 @@ function CoachApp() {
               ))}
             </select>
 
+            <label htmlFor="llm-model-select">LLM model (runtime)</label>
+            <select
+              id="llm-model-select"
+              value={preferredModel}
+              onChange={(event) => setPreferredModel(event.target.value)}
+            >
+              <option value="auto">Auto ({runtimeSelection.llmModel})</option>
+              {llmModelOptions.map((model) => (
+                <option key={model} value={model}>
+                  {model}
+                </option>
+              ))}
+            </select>
+
+            <label htmlFor="asr-model-select">ASR mode (runtime)</label>
+            <select
+              id="asr-model-select"
+              value={preferredAsrModel}
+              onChange={(event) => setPreferredAsrModel(event.target.value)}
+            >
+              {asrPreferenceOptions.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+
+            {performanceWarning ? (
+              <div className="coach-warning-banner">{performanceWarning}</div>
+            ) : null}
+
             <label htmlFor="voice-select">AI voice output</label>
-            <select id="voice-select" value={voiceChoice} onChange={(event) => setVoiceChoice(event.target.value)}>
+            <select
+              id="voice-select"
+              value={voiceChoice}
+              onChange={(event) => setVoiceChoice(event.target.value)}
+            >
               {builtinVoices.map((voice) => (
-                <option key={voice.choice_id || `builtin:${voice.id}`} value={voice.choice_id || `builtin:${voice.id}`}>
+                <option
+                  key={voice.choice_id || `builtin:${voice.id}`}
+                  value={voice.choice_id || `builtin:${voice.id}`}
+                >
                   {voice.name} (clone sample)
                 </option>
               ))}
@@ -1900,7 +2511,10 @@ function CoachApp() {
 
             {selectedBuiltinVoice?.avatar_data_url ? (
               <div className="coach-voice-preview">
-                <img src={selectedBuiltinVoice.avatar_data_url} alt={`${selectedBuiltinVoice.name} avatar`} />
+                <img
+                  src={selectedBuiltinVoice.avatar_data_url}
+                  alt={`${selectedBuiltinVoice.name} avatar`}
+                />
                 <div>
                   <strong>{selectedBuiltinVoice.name}</strong>
                   <p>Default clone-ready voice sample</p>
@@ -1923,7 +2537,9 @@ function CoachApp() {
                   event.target.value = "";
                 }}
               />
-              {referenceClipTitle ? <p className="coach-side-note">Sample: {referenceClipTitle}</p> : null}
+              {referenceClipTitle ? (
+                <p className="coach-side-note">Sample: {referenceClipTitle}</p>
+              ) : null}
               <div className="coach-voice-profile-row">
                 <input
                   type="text"
@@ -1956,7 +2572,9 @@ function CoachApp() {
                       title="Delete profile"
                     >
                       <span className="material-symbols-rounded">
-                        {deletingProfileId === profile.id ? "hourglass_top" : "delete"}
+                        {deletingProfileId === profile.id
+                          ? "hourglass_top"
+                          : "delete"}
                       </span>
                     </button>
                   </div>
@@ -1974,7 +2592,12 @@ function CoachApp() {
               Speak AI replies automatically
             </label>
 
-            <button type="button" className="coach-btn" onClick={startConversation} disabled={!selectedSubject || !languageChoice}>
+            <button
+              type="button"
+              className="coach-btn"
+              onClick={startConversation}
+              disabled={!selectedSubject || !languageChoice}
+            >
               Start conversation
             </button>
           </section>
@@ -1982,7 +2605,9 @@ function CoachApp() {
           <section className="coach-session-shell">
             <div className="coach-meta-row">
               <div className="coach-chip">Subject: {activeSubject}</div>
-              <div className="coach-chip">Language locked: {activeLanguage}</div>
+              <div className="coach-chip">
+                Language locked: {activeLanguage}
+              </div>
               <div className="coach-chip">{username}</div>
               <div className="coach-chip">Turns: {turns.length}</div>
               <div className="coach-chip">Status: {activeSessionStatus}</div>
@@ -1993,7 +2618,9 @@ function CoachApp() {
               <div className="coach-settings-head">
                 <div className="coach-settings-summary">
                   Persona: <strong>{activePersona.label}</strong> · Voice:{" "}
-                  <strong>{selectedBuiltinVoice?.name || "Selected voice"}</strong>
+                  <strong>
+                    {selectedBuiltinVoice?.name || "Selected voice"}
+                  </strong>
                 </div>
                 <button
                   type="button"
@@ -2002,13 +2629,18 @@ function CoachApp() {
                   aria-expanded={showSessionSettings}
                   aria-controls="coach-session-settings"
                 >
-                  <span className="material-symbols-rounded">{showSessionSettings ? "expand_less" : "expand_more"}</span>
+                  <span className="material-symbols-rounded">
+                    {showSessionSettings ? "expand_less" : "expand_more"}
+                  </span>
                   {showSessionSettings ? "Hide settings" : "Show settings"}
                 </button>
               </div>
 
               {showSessionSettings ? (
-                <div className="coach-inline-controls" id="coach-session-settings">
+                <div
+                  className="coach-inline-controls"
+                  id="coach-session-settings"
+                >
                   <label htmlFor="session-persona-select">Persona</label>
                   <select
                     id="session-persona-select"
@@ -2026,6 +2658,43 @@ function CoachApp() {
                     ))}
                   </select>
 
+                  <label htmlFor="session-llm-model-select">LLM model</label>
+                  <select
+                    id="session-llm-model-select"
+                    value={preferredModel}
+                    onChange={(event) => setPreferredModel(event.target.value)}
+                  >
+                    <option value="auto">
+                      Auto ({runtimeSelection.llmModel})
+                    </option>
+                    {llmModelOptions.map((model) => (
+                      <option key={model} value={model}>
+                        {model}
+                      </option>
+                    ))}
+                  </select>
+
+                  <label htmlFor="session-asr-model-select">ASR mode</label>
+                  <select
+                    id="session-asr-model-select"
+                    value={preferredAsrModel}
+                    onChange={(event) =>
+                      setPreferredAsrModel(event.target.value)
+                    }
+                  >
+                    {asrPreferenceOptions.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+
+                  {performanceWarning ? (
+                    <div className="coach-warning-banner session">
+                      {performanceWarning}
+                    </div>
+                  ) : null}
+
                   <label htmlFor="session-voice-select">Voice</label>
                   <select
                     id="session-voice-select"
@@ -2033,7 +2702,10 @@ function CoachApp() {
                     onChange={(event) => setVoiceChoice(event.target.value)}
                   >
                     {builtinVoices.map((voice) => (
-                      <option key={voice.choice_id || `builtin:${voice.id}`} value={voice.choice_id || `builtin:${voice.id}`}>
+                      <option
+                        key={voice.choice_id || `builtin:${voice.id}`}
+                        value={voice.choice_id || `builtin:${voice.id}`}
+                      >
                         {voice.name} (clone sample)
                       </option>
                     ))}
@@ -2057,7 +2729,10 @@ function CoachApp() {
 
                   {selectedBuiltinVoice?.avatar_data_url ? (
                     <div className="coach-voice-preview">
-                      <img src={selectedBuiltinVoice.avatar_data_url} alt={`${selectedBuiltinVoice.name} avatar`} />
+                      <img
+                        src={selectedBuiltinVoice.avatar_data_url}
+                        alt={`${selectedBuiltinVoice.name} avatar`}
+                      />
                       <div>
                         <strong>{selectedBuiltinVoice.name}</strong>
                         <p>Using clone sample voice</p>
@@ -2065,19 +2740,28 @@ function CoachApp() {
                     </div>
                   ) : null}
 
-                  <label className="coach-checkbox-row" htmlFor="session-auto-speak-toggle">
+                  <label
+                    className="coach-checkbox-row"
+                    htmlFor="session-auto-speak-toggle"
+                  >
                     <input
                       id="session-auto-speak-toggle"
                       type="checkbox"
                       checked={autoSpeakReplies}
-                      onChange={(event) => setAutoSpeakReplies(event.target.checked)}
+                      onChange={(event) =>
+                        setAutoSpeakReplies(event.target.checked)
+                      }
                     />
                     Auto-speak replies
                   </label>
                 </div>
               ) : null}
 
-              <div className="coach-view-toggle" role="tablist" aria-label="Conversation view">
+              <div
+                className="coach-view-toggle"
+                role="tablist"
+                aria-label="Conversation view"
+              >
                 <button
                   type="button"
                   className={`coach-view-btn ${viewMode === "chat" ? "active" : ""}`}
@@ -2109,37 +2793,66 @@ function CoachApp() {
                       <p>{turn.transcript || "(No transcript)"}</p>
                     </div>
                     <div className="coach-bubble ai">
-                      <strong>Coach AI {turn.score == null ? "" : `· ${Math.round(turn.score)}/100`}</strong>
+                      <strong>
+                        Coach AI{" "}
+                        {turn.score == null
+                          ? ""
+                          : `· ${Math.round(turn.score)}/100`}
+                      </strong>
                       <p>{turn.reply || "(No reply)"}</p>
                       {turn.reply ? (
                         <button
                           type="button"
                           className="coach-speak-btn"
-                          onClick={() => void speakCoachText(turn.reply, { force: true })}
+                          onClick={() =>
+                            void speakCoachText(turn.reply, { force: true })
+                          }
                         >
-                          <span className="material-symbols-rounded">volume_up</span>
+                          <span className="material-symbols-rounded">
+                            volume_up
+                          </span>
                           Replay voice
                         </button>
                       ) : null}
-                      {turn.question ? <p className="coach-question">{turn.question}</p> : null}
-                      {turn.correction ? <p className="coach-correction">Correction: {turn.correction}</p> : null}
-                      {turn.feedback ? <p className="coach-feedback">{turn.feedback}</p> : null}
+                      {turn.question ? (
+                        <p className="coach-question">{turn.question}</p>
+                      ) : null}
+                      {turn.correction ? (
+                        <p className="coach-correction">
+                          Correction: {turn.correction}
+                        </p>
+                      ) : null}
+                      {turn.feedback ? (
+                        <p className="coach-feedback">{turn.feedback}</p>
+                      ) : null}
                       {turn.mistakes?.length ? (
                         <ul>
                           {turn.mistakes.slice(0, 3).map((mistake, index) => (
-                            <li key={`${turn.id}-mistake-${index}`}>{mistake.detail || mistake.suggestion}</li>
+                            <li key={`${turn.id}-mistake-${index}`}>
+                              {mistake.detail || mistake.suggestion}
+                            </li>
                           ))}
                         </ul>
                       ) : null}
-                      {turn.error ? <p className="coach-error">{turn.error}</p> : null}
+                      {turn.error ? (
+                        <p className="coach-error">{turn.error}</p>
+                      ) : null}
                     </div>
                   </div>
                 ))}
 
                 {currentTurn ? (
                   <div className="coach-live-row">
-                    <p>{isRecording ? "I'm listening..." : "Processing your answer..."}</p>
-                    <div>{currentTurn.transcript || currentTurn.partialTranscript || "Listening..."}</div>
+                    <p>
+                      {isRecording
+                        ? "I'm listening..."
+                        : "Processing your answer..."}
+                    </p>
+                    <div>
+                      {currentTurn.transcript ||
+                        currentTurn.partialTranscript ||
+                        "Listening..."}
+                    </div>
                   </div>
                 ) : null}
 
@@ -2162,7 +2875,9 @@ function CoachApp() {
                       type="button"
                       className="coach-btn coach-btn-small"
                       onClick={() => void sendTextTurn()}
-                      disabled={isSending || isEnding || !String(textDraft || "").trim()}
+                      disabled={
+                        isSending || isEnding || !String(textDraft || "").trim()
+                      }
                     >
                       Send
                     </button>
@@ -2170,44 +2885,78 @@ function CoachApp() {
                 ) : null}
               </section>
             ) : (
-              <section className={`coach-voice-stage ${aiSpeakingNow ? "ai-speaking" : ""}`} aria-live="polite">
-                <div className={`coach-voice-avatar-wrap ${aiSpeakingNow ? "is-speaking" : ""}`}>
+              <section
+                className={`coach-voice-stage ${aiSpeakingNow ? "ai-speaking" : ""}`}
+                aria-live="polite"
+              >
+                <div
+                  className={`coach-voice-avatar-wrap ${aiSpeakingNow ? "is-speaking" : ""}`}
+                >
                   {selectedBuiltinVoice?.avatar_data_url ? (
-                    <img src={selectedBuiltinVoice.avatar_data_url} alt={`${selectedBuiltinVoice.name} avatar`} />
+                    <img
+                      src={selectedBuiltinVoice.avatar_data_url}
+                      alt={`${selectedBuiltinVoice.name} avatar`}
+                    />
                   ) : (
-                    <div className="coach-voice-avatar-fallback">{String(activePersona.label || "A").charAt(0)}</div>
+                    <div className="coach-voice-avatar-fallback">
+                      {String(activePersona.label || "A").charAt(0)}
+                    </div>
                   )}
                 </div>
                 {voiceStageSnapshot.speaker === "ai" ? (
-                  <div className={`coach-voice-wave ${aiSpeakingNow ? "active" : ""}`} aria-hidden="true">
+                  <div
+                    className={`coach-voice-wave ${aiSpeakingNow ? "active" : ""}`}
+                    aria-hidden="true"
+                  >
                     {Array.from({ length: 14 }).map((_, index) => (
-                      <span key={`wave-${index}`} style={{ "--bar-index": `${index}` }} />
+                      <span
+                        key={`wave-${index}`}
+                        style={{ "--bar-index": `${index}` }}
+                      />
                     ))}
                   </div>
                 ) : null}
                 <div className="coach-voice-stage-meta">
-                  <strong>{voiceStageSnapshot.speaker === "ai" ? activePersona.label : "You"}</strong>
+                  <strong>
+                    {voiceStageSnapshot.speaker === "ai"
+                      ? activePersona.label
+                      : "You"}
+                  </strong>
                   <span>
                     {voiceStageSnapshot.speaker === "ai"
-                      ? (voiceStageSnapshot.status === "speaking" ? "Speaking now" : "Ready")
-                      : (voiceStageSnapshot.status === "listening" ? "Listening now" : "Processing")}
+                      ? voiceStageSnapshot.status === "speaking"
+                        ? "Speaking now"
+                        : "Ready"
+                      : voiceStageSnapshot.status === "listening"
+                        ? "Listening now"
+                        : "Processing"}
                   </span>
                 </div>
-                <p className="coach-voice-stage-text">{voiceStageSnapshot.text}</p>
+                <p className="coach-voice-stage-text">
+                  {voiceStageSnapshot.text}
+                </p>
               </section>
             )}
 
             {!conversationEnded ? (
               <div className="coach-controls">
-                <div className="coach-recording-text">{isRecording ? `I'm listening... ${recordingDuration}` : "Click mic to talk"}</div>
+                <div className="coach-recording-text">
+                  {isRecording
+                    ? `I'm listening... ${recordingDuration}`
+                    : "Click mic to talk"}
+                </div>
                 <div className="coach-mic-wrap" role="presentation">
-                  <div className={`coach-mic-halo ${isRecording ? "listening" : ""}`}>
+                  <div
+                    className={`coach-mic-halo ${isRecording ? "listening" : ""}`}
+                  >
                     <button
                       type="button"
                       className={`coach-mic-btn ${isRecording ? "recording" : ""}`}
                       onClick={handleMicToggle}
                       disabled={isSending || isEnding}
-                      aria-label={isRecording ? "Stop recording" : "Start recording"}
+                      aria-label={
+                        isRecording ? "Stop recording" : "Start recording"
+                      }
                     >
                       <span className="material-symbols-rounded">mic</span>
                     </button>
@@ -2231,19 +2980,26 @@ function CoachApp() {
           <section className="coach-summary-card">
             <h2>Conversation Summary</h2>
             <p>
-              Average score: <strong>{summary.average_score == null ? "N/A" : summary.average_score}</strong>
+              Average score:{" "}
+              <strong>
+                {summary.average_score == null ? "N/A" : summary.average_score}
+              </strong>
             </p>
             {summary.turn_count != null ? (
               <p>
                 Scored turns:{" "}
                 <strong>
-                  {summary.scored_turn_count == null ? "0" : summary.scored_turn_count}/{summary.turn_count}
+                  {summary.scored_turn_count == null
+                    ? "0"
+                    : summary.scored_turn_count}
+                  /{summary.turn_count}
                 </strong>
               </p>
             ) : null}
             <p>{summary.feedback_summary}</p>
 
-            {Array.isArray(summary.improvement_points) && summary.improvement_points.length ? (
+            {Array.isArray(summary.improvement_points) &&
+            summary.improvement_points.length ? (
               <>
                 <h3>Improve Next</h3>
                 <ul>
@@ -2254,13 +3010,19 @@ function CoachApp() {
               </>
             ) : null}
 
-            <button type="button" className="coach-btn" onClick={startAnotherConversation}>
+            <button
+              type="button"
+              className="coach-btn"
+              onClick={startAnotherConversation}
+            >
               Start another subject
             </button>
           </section>
         ) : null}
 
-        {errorMessage ? <div className="coach-error-banner">{errorMessage}</div> : null}
+        {errorMessage ? (
+          <div className="coach-error-banner">{errorMessage}</div>
+        ) : null}
       </main>
     </div>
   );

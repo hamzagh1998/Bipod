@@ -226,6 +226,7 @@ async def _stream_turn_impl(
     audio: UploadFile,
     transcript_hint: Optional[str],
     preferred_model: Optional[str],
+    preferred_asr_model: Optional[str],
     persona_style: Optional[str],
     user_id: int,
 ) -> StreamingResponse:
@@ -251,6 +252,7 @@ async def _stream_turn_impl(
                 audio=audio,
                 transcript_hint=transcript_hint,
                 preferred_model=preferred_model,
+                preferred_asr_model=preferred_asr_model,
                 persona_style=persona_style,
             ):
                 normalized = _validate_stream_event(event)
@@ -287,6 +289,7 @@ async def stream_turn_by_path(
     audio: UploadFile = File(...),
     transcript_hint: Optional[str] = Form(default=None, max_length=4000),
     preferred_model: Optional[str] = Form(default=None, min_length=1, max_length=120),
+    preferred_asr_model: Optional[str] = Form(default=None, max_length=40),
     persona_style: Optional[str] = Form(default=None, max_length=2000),
     user_id: int = Depends(auth_service.get_current_user),
 ):
@@ -295,6 +298,7 @@ async def stream_turn_by_path(
         audio=audio,
         transcript_hint=transcript_hint,
         preferred_model=preferred_model,
+        preferred_asr_model=preferred_asr_model,
         persona_style=persona_style,
         user_id=user_id,
     )
@@ -306,6 +310,7 @@ async def stream_turn(
     session_id: str = Form(..., min_length=1, max_length=120),
     transcript_hint: Optional[str] = Form(default=None, max_length=4000),
     preferred_model: Optional[str] = Form(default=None, min_length=1, max_length=120),
+    preferred_asr_model: Optional[str] = Form(default=None, max_length=40),
     persona_style: Optional[str] = Form(default=None, max_length=2000),
     user_id: int = Depends(auth_service.get_current_user),
 ):
@@ -314,6 +319,7 @@ async def stream_turn(
         audio=audio,
         transcript_hint=transcript_hint,
         preferred_model=preferred_model,
+        preferred_asr_model=preferred_asr_model,
         persona_style=persona_style,
         user_id=user_id,
     )

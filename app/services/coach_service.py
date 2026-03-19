@@ -106,6 +106,10 @@ class CoachService:
         "ur": "Urdu",
         "zh": "Chinese",
     }
+    LOW_VALUE_MISSING_CHAR_PATTERN = re.compile(
+        r"missing\s+'(?P<char>[^']{1,3})'\s+in\s+'(?P<word>[^']+)'",
+        flags=re.IGNORECASE,
+    )
 
     def __init__(self) -> None:
         self.base_url = settings.OLLAMA_BASE_URL
@@ -288,6 +292,22 @@ class CoachService:
         if isinstance(payload, Mapping):
             return dict(payload)
         return dict(payload)
+
+    def _is_low_value_mistake(self, detail: str, *, suggestion: Optional[str] = None) -> bool:
+        normalized_detail = str(detail or "").strip().lower()
+        if not normalized_detail:
+            return True
+        match = self.LOW_VALUE_MISSING_CHAR_PATTERN.search(normalized_detail)
+        if not match:
+            return False
+        missing_char = str(match.group("char") or "").strip().lower()
+        target_word = str(match.group("word") or "").strip().lower()
+        normalized_suggestion = str(suggestion or "").strip().lower()
+        if missing_char and target_word and missing_char in target_word:
+            return True
+        if target_word and normalized_suggestion and normalized_suggestion == target_word:
+            return True
+        return False
 
     def _session_counts(self, session: CoachSession) -> tuple[int, int]:
         turn_count = len(session.turns)
@@ -478,6 +498,13 @@ class CoachService:
                 ).strip()
                 if not detail:
                     continue
+                suggestion = (
+                    str(data["suggestion"]).strip()
+                    if data.get("suggestion") is not None
+                    else None
+                )
+                if self._is_low_value_mistake(detail, suggestion=suggestion):
+                    continue
 
                 mistake = CoachMistake(
                     session_id=session_id,
@@ -486,11 +513,7 @@ class CoachService:
                     category=str(data.get("category") or "general").strip() or "general",
                     detail=detail,
                     severity=str(data.get("severity") or "medium").strip() or "medium",
-                    suggestion=(
-                        str(data["suggestion"]).strip()
-                        if data.get("suggestion") is not None
-                        else None
-                    ),
+                    suggestion=suggestion,
                     metadata_json=data.get("metadata") or data.get("metadata_json"),
                 )
                 session.add(mistake)
@@ -1190,6 +1213,8 @@ class CoachService:
                 first = replacements[0]
                 if isinstance(first, Mapping):
                     suggestion = str(first.get("value") or "").strip()
+            if self._is_low_value_mistake(detail, suggestion=suggestion):
+                continue
             findings.append(
                 {
                     "category": "grammar",
@@ -1882,6 +1907,14 @@ class CoachService:
             return accurate_name
         return str(profile.get("asr_accurate_model") or self._fast_whisper_model_ref())
 
+    def _normalize_asr_preference(self, preferred_asr_model: Optional[str]) -> str:
+        normalized = str(preferred_asr_model or "").strip().lower()
+        if normalized in {"accurate", "quality", "high", "high_accuracy"}:
+            return "accurate"
+        if normalized in {"fast", "speed", "low_latency"}:
+            return "fast"
+        return "auto"
+
     async def _get_whisper_model(self):
         if self._whisper_model is not None:
             return self._whisper_model
@@ -1995,6 +2028,7 @@ class CoachService:
         filename: Optional[str] = None,
         transcript_hint: Optional[str] = None,
         language: Optional[str] = None,
+        preferred_asr_model: Optional[str] = None,
     ) -> dict[str, Any]:
         if transcript_hint and transcript_hint.strip():
             hinted = re.sub(r"\s+", " ", transcript_hint).strip()
@@ -2002,13 +2036,21 @@ class CoachService:
                 "text": hinted,
                 "model": "hint",
                 "retry_used": False,
+                "selection": "hint",
                 "confidence": 1.0,
                 "confidence_band": "high",
                 "avg_logprob": None,
                 "no_speech_prob": None,
             }
-
-        whisper_model = await self._get_whisper_model()
+        asr_selection = self._normalize_asr_preference(preferred_asr_model)
+        fast_model_ref = self._fast_whisper_model_ref()
+        accurate_model_ref = self._accurate_whisper_model_ref()
+        if asr_selection == "accurate":
+            whisper_model = await self._get_whisper_accurate_model()
+            selected_model_ref = accurate_model_ref
+        else:
+            whisper_model = await self._get_whisper_model()
+            selected_model_ref = fast_model_ref
         suffix = ".webm"
         if filename and "." in filename:
             suffix = f".{filename.rsplit('.', 1)[-1]}"
@@ -2017,6 +2059,7 @@ class CoachService:
                 "text": f"captured {len(audio_bytes)} bytes of audio",
                 "model": "none",
                 "retry_used": False,
+                "selection": asr_selection,
                 "confidence": 0.0,
                 "confidence_band": "low",
                 "avg_logprob": None,
@@ -2030,6 +2073,8 @@ class CoachService:
             retry_enabled = retry_default
         else:
             retry_enabled = retry_raw.lower() in {"1", "true", "yes", "on"}
+        if asr_selection != "auto":
+            retry_enabled = False
         threshold_default = float(profile.get("asr_retry_threshold", settings.COACH_WHISPER_RETRY_CONFIDENCE_THRESHOLD))
         threshold_raw = self._env_text("COACH_WHISPER_RETRY_CONFIDENCE_THRESHOLD", str(settings.COACH_WHISPER_RETRY_CONFIDENCE_THRESHOLD))
         try:
@@ -2050,8 +2095,9 @@ class CoachService:
             )
             result = {
                 "text": text or f"captured {len(audio_bytes)} bytes of audio",
-                "model": self._fast_whisper_model_ref(),
+                "model": selected_model_ref,
                 "retry_used": False,
+                "selection": asr_selection,
                 **stats,
             }
 
@@ -2065,8 +2111,9 @@ class CoachService:
                     )
                     retry_result = {
                         "text": retry_text or result["text"],
-                        "model": self._accurate_whisper_model_ref(),
+                        "model": accurate_model_ref,
                         "retry_used": True,
+                        "selection": "auto",
                         **retry_stats,
                     }
                     if retry_result["confidence"] >= result["confidence"]:
@@ -2090,8 +2137,9 @@ class CoachService:
                         )
                         return {
                             "text": text or f"captured {len(audio_bytes)} bytes of audio",
-                            "model": self._fast_whisper_model_ref(),
+                            "model": selected_model_ref,
                             "retry_used": False,
+                            "selection": asr_selection,
                             **stats,
                         }
                     except Exception as retry_exc:
@@ -2108,6 +2156,7 @@ class CoachService:
             "text": f"captured {len(audio_bytes)} bytes of audio",
             "model": "fallback-bytes",
             "retry_used": False,
+            "selection": asr_selection,
             "confidence": 0.0,
             "confidence_band": "low",
             "avg_logprob": None,
@@ -2225,6 +2274,7 @@ class CoachService:
             "Rules:\n"
             "- If there is an obvious grammar mistake and confidence is not low, include a quick recast then continue the conversation.\n"
             "- If confidence is low, avoid strict correction and ask confirmation first.\n"
+            "- If Persona instructions define a character identity, stay in that identity and never rename yourself.\n"
             "- Keep messages concise and natural."
         )
         user_prompt = (
@@ -2320,6 +2370,7 @@ class CoachService:
             "7) mistakes must include category, detail, severity, suggestion.\n"
             "8) Keep a consistent speaking style based on Persona instructions when provided.\n"
             "9) When learner grammar is clearly wrong, begin reply with a brief natural recast correction, then continue.\n"
+            "10) If Persona instructions define a character identity, stay in that identity and never rename yourself.\n"
         )
         user_prompt = (
             f"Target language: {target_language}\n"
@@ -2396,6 +2447,7 @@ class CoachService:
         audio,
         transcript_hint: Optional[str] = None,
         preferred_model: Optional[str] = None,
+        preferred_asr_model: Optional[str] = None,
         persona_style: Optional[str] = None,
     ) -> AsyncIterator[dict]:
         session = await self.get_session(session_id=str(session_id), user_id=user_id)
@@ -2414,6 +2466,7 @@ class CoachService:
             filename=getattr(audio, "filename", None),
             transcript_hint=transcript_hint,
             language=self._target_language_code(session.target_language),
+            preferred_asr_model=preferred_asr_model,
         )
         transcript = str(transcription_payload.get("text") or "").strip()
         asr_confidence_band = str(transcription_payload.get("confidence_band") or "low").strip().lower()
@@ -2433,6 +2486,7 @@ class CoachService:
             "turn_id": turn_id,
             "text": transcript,
             "asr_model": str(transcription_payload.get("model") or ""),
+            "asr_selection": str(transcription_payload.get("selection") or "auto"),
             "asr_retry_used": bool(transcription_payload.get("retry_used")),
             "asr_confidence_band": asr_confidence_band,
             "asr_confidence": transcription_payload.get("confidence"),
@@ -2495,15 +2549,17 @@ class CoachService:
             allowed = set(available_models)
             candidates = [candidate for candidate in candidates if candidate in allowed] or candidates
 
-        if preferred_model and preferred_model.strip():
-            preferred_model = preferred_model.strip()
-            if preferred_model in candidates:
-                candidates = [preferred_model] + [candidate for candidate in candidates if candidate != preferred_model]
+        requested_model = str(preferred_model or "").strip()
+        respect_user_model_choice = False
+        if requested_model:
+            if requested_model in candidates:
+                respect_user_model_choice = True
+                candidates = [requested_model] + [candidate for candidate in candidates if candidate != requested_model]
             else:
                 yield {
                     "type": "model_fallback",
                     "turn_id": turn_id,
-                    "requested_model": preferred_model,
+                    "requested_model": requested_model,
                     "selected_model": candidates[0],
                     "reason": "requested_model_unavailable",
                 }
@@ -2564,6 +2620,17 @@ class CoachService:
                     persona_style=persona_style,
                 )
                 if (not two_pass_enabled) and observed_latency > self.default_latency_budget_ms and idx + 1 < len(candidates):
+                    if respect_user_model_choice and model == requested_model:
+                        logger.info(
+                            "Keeping user-selected coach model '%s' despite high latency (%sms > %sms)",
+                            model,
+                            observed_latency,
+                            self.default_latency_budget_ms,
+                        )
+                        selected_model = model
+                        full_coaching_result = result
+                        full_latency_ms = observed_latency
+                        break
                     yield {
                         "type": "model_fallback",
                         "turn_id": turn_id,

@@ -320,6 +320,15 @@ def test_transcript_evaluable_gate_filters_noise_placeholders():
     assert coach_service._is_transcript_evaluable("I usually wake up at seven.") is True
 
 
+def test_normalize_asr_preference_aliases():
+    assert coach_service._normalize_asr_preference(None) == "auto"
+    assert coach_service._normalize_asr_preference("fast") == "fast"
+    assert coach_service._normalize_asr_preference("speed") == "fast"
+    assert coach_service._normalize_asr_preference("accurate") == "accurate"
+    assert coach_service._normalize_asr_preference("high_accuracy") == "accurate"
+    assert coach_service._normalize_asr_preference("unknown-mode") == "auto"
+
+
 def test_target_language_code_mapping():
     assert coach_service._target_language_code("English") == "en"
     assert coach_service._target_language_code("Spanish") == "es"
@@ -589,6 +598,127 @@ def test_process_text_turn_adds_languagetool_findings(coach_db, monkeypatch):
         assert len(payload["mistakes"]) >= 2
         assert any("Possible article issue." in str(item.get("detail")) for item in payload["mistakes"])
         assert "LanguageTool flagged" in str(payload.get("explanation") or "")
+
+    asyncio.run(scenario())
+
+
+def test_save_turn_filters_low_value_typo_mistakes(coach_db):
+    async def scenario():
+        user = await _seed_user("mistake-filter-user")
+        session = await coach_service.create_session(
+            user_id=user.id,
+            title="Mistake filtering",
+            target_language="English",
+            focus_area="Daily life",
+        )
+
+        turn = await coach_service.save_turn_with_mistakes(
+            session_id=session.id,
+            user_id=user.id,
+            transcript="I am here with you.",
+            reply="Good. Continue.",
+            score=80,
+            mistakes=[
+                {
+                    "category": "grammar",
+                    "detail": "missing 'e' in 'you'",
+                    "severity": "low",
+                    "suggestion": "you",
+                },
+                {
+                    "category": "grammar",
+                    "detail": "Use present simple here.",
+                    "severity": "medium",
+                    "suggestion": "Use present simple.",
+                },
+            ],
+        )
+
+        assert turn is not None
+        assert len(turn.mistakes) == 1
+        assert turn.mistakes[0].detail == "Use present simple here."
+
+    asyncio.run(scenario())
+
+
+def test_stream_turn_keeps_explicit_user_model_when_slow(coach_db, monkeypatch):
+    class _Upload:
+        def __init__(self, data: bytes, filename: str = "voice.webm"):
+            self._buffer = io.BytesIO(data)
+            self.filename = filename
+
+        async def read(self, size: int = -1):
+            return self._buffer.read(size)
+
+        async def seek(self, offset: int):
+            self._buffer.seek(offset)
+
+    async def scenario():
+        user = await _seed_user("voice-model-lock-user")
+        session = await coach_service.create_session(
+            user_id=user.id,
+            title="Model lock",
+            target_language="English",
+            focus_area="Daily life",
+        )
+
+        async def fake_transcribe_audio_adaptive(**_kwargs):
+            return {
+                "text": "I usually walk to work and buy coffee on the way.",
+                "model": "medium",
+                "retry_used": False,
+                "selection": "auto",
+                "confidence": 0.93,
+                "confidence_band": "high",
+                "avg_logprob": -0.2,
+                "no_speech_prob": 0.01,
+            }
+
+        async def fake_available_models():
+            return ["qwen3:8b", "qwen2.5:7b"]
+
+        async def fake_coach_with_model(*, model, **_kwargs):
+            latency = 9999 if model == "qwen3:8b" else 120
+            return (
+                {
+                    "reply": "Nice sentence. Add one detail about time.",
+                    "follow_up_question": "What time do you leave home?",
+                    "score": 86,
+                    "correction": "I usually walk to work and buy coffee on the way.",
+                    "explanation": "Target: include a time marker. Native: أضف وقتا محددا.",
+                    "mistakes": [],
+                },
+                latency,
+            )
+
+        monkeypatch.setenv("COACH_ENABLE_TWO_PASS_VOICE", "false")
+        monkeypatch.setattr(coach_service, "default_latency_budget_ms", 50.0)
+        monkeypatch.setattr(coach_service, "_transcribe_audio_adaptive", fake_transcribe_audio_adaptive)
+        monkeypatch.setattr(coach_service, "_available_ollama_models", fake_available_models)
+        monkeypatch.setattr(coach_service, "_coach_with_model", fake_coach_with_model)
+
+        events = []
+        async for event in coach_service.stream_turn(
+            user_id=user.id,
+            session_id=session.id,
+            audio=_Upload(b"fake-audio"),
+            preferred_model="qwen3:8b",
+            preferred_asr_model="auto",
+            persona_style="Anby persona",
+        ):
+            events.append(event)
+
+        fallback_events = [
+            event
+            for event in events
+            if str(event.get("type") or "") == "model_fallback"
+            and str(event.get("reason") or "") == "latency_budget_exceeded"
+        ]
+        assert fallback_events == []
+
+        turns = await coach_service.list_turns(session.id, user.id)
+        assert turns
+        assert turns[-1].model_id == "qwen3:8b"
 
     asyncio.run(scenario())
 

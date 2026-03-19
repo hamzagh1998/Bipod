@@ -16,12 +16,13 @@ COPY cosyvoice/requirements.txt /tmp/requirements.txt
 RUN pip install --no-cache-dir --upgrade pip \
     && pip install --no-cache-dir -r /tmp/requirements.txt \
     && pip install --no-cache-dir torch==2.5.1 torchaudio==2.5.1 --index-url https://download.pytorch.org/whl/cpu \
-    && git clone --depth 1 https://github.com/FunAudioLLM/CosyVoice.git /opt/CosyVoice \
+    && git clone --depth 1 --recurse-submodules --shallow-submodules https://github.com/FunAudioLLM/CosyVoice.git /opt/CosyVoice \
     && pip install --no-cache-dir \
       setuptools \
       wheel \
       tqdm \
       hyperpyyaml \
+      matcha-tts \
       modelscope \
       onnxruntime \
       inflect \
@@ -32,7 +33,7 @@ RUN pip install --no-cache-dir --upgrade pip \
       conformer \
       openai-whisper
 
-ENV PYTHONPATH=/opt/CosyVoice
+ENV PYTHONPATH=/opt/CosyVoice:/opt/CosyVoice/third_party/Matcha-TTS
 
 COPY cosyvoice/server.py /app/server.py
 COPY cosyvoice/assets /app/data/coach_voice_library
