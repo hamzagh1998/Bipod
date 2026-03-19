@@ -9,6 +9,7 @@ services:
       - "5001:5001"
     environment:
       - HF_HOME=/app/data/huggingface
+      - HF_TOKEN=${HF_TOKEN}
       - HF_HUB_OFFLINE=${HF_HUB_OFFLINE:-0}
       - MODELSCOPE_CACHE=/app/data/modelscope
       - COACH_COSYVOICE_MODEL_ID=${COACH_COSYVOICE_MODEL_ID:-iic/CosyVoice-300M}
@@ -98,6 +99,7 @@ services:
       - IMAGINE_API_URL=http://imagine:3333
       - PYTHON_JIT=${PYTHON_JIT:-on}
       - HF_HOME=/app/data/huggingface
+      - HF_TOKEN=${HF_TOKEN}
       - HF_HUB_OFFLINE=${HF_HUB_OFFLINE:-1}
       - COACH_WHISPER_MODEL=${COACH_WHISPER_MODEL:-auto}
       - COACH_WHISPER_FAST_MODEL=${COACH_WHISPER_FAST_MODEL:-auto}

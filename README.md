@@ -1,6 +1,6 @@
-# 🦵 Bipod: Weightless Intelligence
+# 🤖 Bipod: Weightless Intelligence
 
-Bipod is a self-sovereign AI companion designed to be free from the gravity of the cloud. It is a local-first, hardware-agnostic system that scales from high-end workstations to Raspberry Pis.
+Bipod is a self-sovereign AI companion designed to be free from the cloud. It is a local-first, hardware-agnostic system that scales from high-end workstations to Raspberry Pis.
 
 ## 🌌 Project Philosophy
 
@@ -14,7 +14,7 @@ Bipod is a self-sovereign AI companion designed to be free from the gravity of t
 
 To leverage GPU acceleration for inference (Ollama) and audio processing (Faster-Whisper), you must configure the NVIDIA Container Toolkit.
 
-### 🍎 Fedora (Verified)
+### 👒 Fedora (Verified)
 
 1. **Install the Toolkit:**
 
@@ -118,6 +118,8 @@ To avoid first-run stalls, preload coach packages/models manually:
 ./scripts/preload-coach-models.sh
 ```
 
+If Hugging Face models are private/gated (or to avoid anonymous rate limits), set `HF_TOKEN` in `.env` before running preload.
+
 What this script does:
 
 - builds `bipod-app` and `cosyvoice` images (runtime packages ready)
@@ -209,7 +211,7 @@ docker exec -it bipod_ollama ollama pull nomic-embed-text
 
 ## 🎨 Imagine Studio & Image/video Generation
 
-Bipod features a professional-grade **Imagine Studio** for high-quality, local image and video generation.
+Bipod features a professional-grade **Imagine Studio** for high-quality, local image generation.
 
 ### ✨ Features
 
