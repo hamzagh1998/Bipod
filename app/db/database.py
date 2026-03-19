@@ -75,6 +75,12 @@ def _apply_sqlite_schema_patches(conn) -> None:
             "audio_retention_opt_in",
             "audio_retention_opt_in BOOLEAN NOT NULL DEFAULT 0",
         )
+        _ensure_sqlite_column(
+            conn,
+            "coach_sessions",
+            "voice_profile_id",
+            "voice_profile_id VARCHAR",
+        )
 
     if "coach_turns" in tables:
         _ensure_sqlite_column(

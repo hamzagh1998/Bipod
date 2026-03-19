@@ -18,6 +18,14 @@ class User(Base):
     coach_sessions: Mapped[List["CoachSession"]] = relationship(back_populates="user", cascade="all, delete-orphan")
     coach_turns: Mapped[List["CoachTurn"]] = relationship(back_populates="user", cascade="all, delete-orphan")
     coach_mistakes: Mapped[List["CoachMistake"]] = relationship(back_populates="user", cascade="all, delete-orphan")
+    coach_voice_samples: Mapped[List["CoachVoiceSample"]] = relationship(
+        back_populates="user",
+        cascade="all, delete-orphan",
+    )
+    coach_voice_profiles: Mapped[List["CoachVoiceProfile"]] = relationship(
+        back_populates="user",
+        cascade="all, delete-orphan",
+    )
 
 class Conversation(Base):
     __tablename__ = "conversations"
@@ -89,6 +97,7 @@ class CoachSession(Base):
     audio_retention_opt_in: Mapped[bool] = mapped_column(Boolean, default=False)
     focus_area: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     model_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    voice_profile_id: Mapped[Optional[str]] = mapped_column(ForeignKey("coach_voice_profiles.id"), nullable=True)
     status: Mapped[str] = mapped_column(String, default="active")
     created_at: Mapped[datetime.datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime.datetime] = mapped_column(
@@ -98,11 +107,54 @@ class CoachSession(Base):
     )
 
     user: Mapped["User"] = relationship(back_populates="coach_sessions")
+    voice_profile: Mapped[Optional["CoachVoiceProfile"]] = relationship(back_populates="sessions")
     turns: Mapped[List["CoachTurn"]] = relationship(
         back_populates="session",
         cascade="all, delete-orphan",
         order_by="CoachTurn.turn_index",
     )
+
+
+class CoachVoiceSample(Base):
+    __tablename__ = "coach_voice_samples"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    title: Mapped[str] = mapped_column(String, default="Voice sample")
+    file_path: Mapped[str] = mapped_column(String, unique=True)
+    mime_type: Mapped[str] = mapped_column(String, default="audio/wav")
+    file_size_bytes: Mapped[int] = mapped_column(default=0)
+    language: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    status: Mapped[str] = mapped_column(String, default="active")
+    created_at: Mapped[datetime.datetime] = mapped_column(DateTime, server_default=func.now())
+
+    user: Mapped["User"] = relationship(back_populates="coach_voice_samples")
+    profiles: Mapped[List["CoachVoiceProfile"]] = relationship(back_populates="source_sample")
+
+
+class CoachVoiceProfile(Base):
+    __tablename__ = "coach_voice_profiles"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    sample_id: Mapped[Optional[str]] = mapped_column(ForeignKey("coach_voice_samples.id"), nullable=True)
+    name: Mapped[str] = mapped_column(String, default="My voice")
+    provider: Mapped[str] = mapped_column(String, default="cosyvoice")
+    file_path: Mapped[str] = mapped_column(String, unique=True)
+    mime_type: Mapped[str] = mapped_column(String, default="audio/wav")
+    file_size_bytes: Mapped[int] = mapped_column(default=0)
+    language: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    status: Mapped[str] = mapped_column(String, default="active")
+    created_at: Mapped[datetime.datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    user: Mapped["User"] = relationship(back_populates="coach_voice_profiles")
+    source_sample: Mapped[Optional["CoachVoiceSample"]] = relationship(back_populates="profiles")
+    sessions: Mapped[List["CoachSession"]] = relationship(back_populates="voice_profile")
 
 
 class CoachTurn(Base):

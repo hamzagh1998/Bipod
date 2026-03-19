@@ -1,4 +1,7 @@
 import asyncio
+import io
+import sys
+import types
 
 import pytest
 from sqlalchemy import create_engine
@@ -28,6 +31,9 @@ class _AsyncSessionAdapter:
 
     async def flush(self):
         self._session.flush()
+
+    async def delete(self, obj):
+        self._session.delete(obj)
 
     async def __aenter__(self):
         return self
@@ -222,3 +228,247 @@ def test_model_selection_uses_quality_order_and_latency_hooks():
         latency_fallback=lambda candidates: candidates[-1],
     )
     assert fallback_selected == "balanced"
+
+
+def test_end_session_marks_completed_and_returns_summary(coach_db):
+    async def scenario():
+        user = await _seed_user("summary-user")
+        session = await coach_service.create_session(
+            user_id=user.id,
+            title="Interview Prep",
+            focus_area="job interview",
+            target_language="English",
+            cefr_level="B1",
+        )
+
+        await coach_service.save_turn_with_mistakes(
+            session.id,
+            user.id,
+            transcript="I led a small team.",
+            reply="Great. Tell me about a challenge.",
+            score=82,
+            explanation="Target: Add one concrete metric. Native: Give one measurable result.",
+            mistakes=[
+                {"category": "detail", "detail": "Missing measurable result.", "severity": "medium"},
+            ],
+        )
+        await coach_service.save_turn_with_mistakes(
+            session.id,
+            user.id,
+            transcript="We improved speed by 30 percent.",
+            reply="Nice. What did you learn?",
+            score=90,
+            mistakes=[],
+        )
+
+        summary = await coach_service.end_session(user.id, session.id)
+        assert summary is not None
+        assert summary["status"] == "completed"
+        assert summary["turn_count"] == 2
+        assert summary["scored_turn_count"] == 2
+        assert summary["average_score"] == 86.0
+        assert "feedback_summary" in summary
+        assert isinstance(summary["improvement_points"], list)
+
+        sessions = await coach_service.list_sessions(user.id)
+        assert sessions[0]["status"] == "completed"
+
+    asyncio.run(scenario())
+
+
+def test_get_whisper_model_uses_local_only_settings(monkeypatch):
+    captured = {}
+
+    class _FakeWhisperModel:
+        def __init__(self, model_ref, **kwargs):
+            captured["model_ref"] = model_ref
+            captured["kwargs"] = kwargs
+
+    fake_module = types.SimpleNamespace(WhisperModel=_FakeWhisperModel)
+    monkeypatch.setitem(sys.modules, "faster_whisper", fake_module)
+    monkeypatch.setattr(coach_service_module.settings, "COACH_WHISPER_MODEL", "small")
+    monkeypatch.setattr(coach_service_module.settings, "COACH_WHISPER_MODEL_PATH", "/tmp/local-whisper-small")
+    monkeypatch.setattr(coach_service_module.settings, "COACH_WHISPER_LOCAL_FILES_ONLY", True)
+    monkeypatch.setattr(coach_service_module.settings, "COACH_WHISPER_DOWNLOAD_ROOT", "/tmp/hf-cache")
+    monkeypatch.setattr(coach_service_module.settings, "USE_GPU", False)
+    monkeypatch.delenv("COACH_WHISPER_MODEL", raising=False)
+    monkeypatch.delenv("COACH_WHISPER_MODEL_PATH", raising=False)
+    monkeypatch.delenv("COACH_WHISPER_LOCAL_FILES_ONLY", raising=False)
+    monkeypatch.delenv("COACH_WHISPER_DOWNLOAD_ROOT", raising=False)
+
+    coach_service._whisper_model = None
+
+    async def scenario():
+        model = await coach_service._get_whisper_model()
+        assert model is not None
+
+    asyncio.run(scenario())
+
+    assert captured["model_ref"] == "/tmp/local-whisper-small"
+    assert captured["kwargs"]["device"] == "cpu"
+    assert captured["kwargs"]["compute_type"] == "int8"
+    assert captured["kwargs"]["local_files_only"] is True
+    assert captured["kwargs"]["download_root"] == "/tmp/hf-cache"
+    coach_service._whisper_model = None
+
+
+def test_transcript_evaluable_gate_filters_noise_placeholders():
+    assert coach_service._is_transcript_evaluable("captured 93201 bytes of audio") is False
+    assert coach_service._is_transcript_evaluable("cough") is False
+    assert coach_service._is_transcript_evaluable("uh um") is False
+    assert coach_service._is_transcript_evaluable("I usually wake up at seven.") is True
+
+
+def test_target_language_code_mapping():
+    assert coach_service._target_language_code("English") == "en"
+    assert coach_service._target_language_code("Spanish") == "es"
+    assert coach_service._target_language_code("French (fr)") == "fr"
+    assert coach_service._target_language_code("ar") == "ar"
+
+
+def test_delete_session_removes_owned_session(coach_db):
+    async def scenario():
+        user = await _seed_user("delete-user")
+        session = await coach_service.create_session(
+            user_id=user.id,
+            title="Delete me",
+            focus_area="cleanup",
+        )
+        deleted = await coach_service.delete_session(session.id, user.id)
+        assert deleted is True
+
+        loaded = await coach_service.get_session(session.id, user.id)
+        assert loaded is None
+
+    asyncio.run(scenario())
+
+
+def test_resolve_tts_voice_preset_anby():
+    voice, rate, pitch = coach_service._resolve_tts_voice(language="English", voice_preset="anby")
+    assert voice.startswith("en")
+    assert rate == 145
+    assert pitch == 38
+
+
+def test_synthesize_reply_audio_requires_engine(monkeypatch):
+    monkeypatch.setattr(coach_service_module.shutil, "which", lambda _cmd: None)
+
+    async def scenario():
+        with pytest.raises(RuntimeError) as exc_info:
+            await coach_service.synthesize_reply_audio(
+                text="hello",
+                language="English",
+                voice_preset="default",
+                persona_style=None,
+            )
+        assert "espeak-ng" in str(exc_info.value)
+
+    asyncio.run(scenario())
+
+
+def test_synthesize_reply_audio_disables_espeak_fallback_for_clone_voice(monkeypatch):
+    monkeypatch.setattr(coach_service_module.shutil, "which", lambda _cmd: "/usr/bin/espeak-ng")
+    monkeypatch.setattr(coach_service, "_builtin_voice_record", lambda _voice_id: {"id": "anby", "sample_path": "/tmp/fake"})
+
+    async def fake_synthesize_with_cosyvoice(**_kwargs):
+        raise RuntimeError("CosyVoice clone unavailable")
+
+    monkeypatch.setattr(coach_service, "_synthesize_with_cosyvoice", fake_synthesize_with_cosyvoice)
+    monkeypatch.setattr(
+        coach_service,
+        "_load_reference_audio_bytes",
+        lambda **_kwargs: asyncio.sleep(0, result=b"fake-reference-audio"),
+    )
+    monkeypatch.setenv("COACH_TTS_ALLOW_ESPEAK_FALLBACK", "true")
+
+    async def scenario():
+        with pytest.raises(RuntimeError) as exc_info:
+            await coach_service.synthesize_reply_audio(
+                text="hello",
+                language="English",
+                voice_preset="default",
+                persona_style=None,
+                tts_provider="cosyvoice",
+                voice_mode="preset",
+                builtin_voice_id="anby",
+                user_id=1,
+            )
+        assert "local fallback is disabled for clone voices" in str(exc_info.value)
+
+    asyncio.run(scenario())
+
+
+def test_voice_sample_profile_crud_flow(coach_db):
+    class _Upload:
+        def __init__(self, data: bytes, filename: str = "voice.wav", content_type: str = "audio/wav"):
+            self._buffer = io.BytesIO(data)
+            self.filename = filename
+            self.content_type = content_type
+
+        async def read(self, size: int = -1):
+            return self._buffer.read(size)
+
+        async def seek(self, offset: int):
+            self._buffer.seek(offset)
+
+    async def scenario():
+        user = await _seed_user("voice-user")
+        sample = await coach_service.save_voice_reference(
+            user_id=user.id,
+            file=_Upload(b"RIFFfakewav"),
+            title="sample.wav",
+            language="English",
+        )
+        assert sample["id"]
+        assert sample["title"] == "sample.wav"
+
+        profile = await coach_service.create_voice_profile(
+            user_id=user.id,
+            name="My cloned voice",
+            reference_clip_id=sample["id"],
+            language="English",
+        )
+        assert profile["id"]
+        assert profile["name"] == "My cloned voice"
+
+        listed = await coach_service.list_voice_profiles(user_id=user.id)
+        assert len(listed) == 1
+        assert listed[0]["id"] == profile["id"]
+
+        deleted = await coach_service.delete_voice_profile(profile_id=profile["id"], user_id=user.id)
+        assert deleted is True
+
+        listed_after_delete = await coach_service.list_voice_profiles(user_id=user.id)
+        assert listed_after_delete == []
+
+    asyncio.run(scenario())
+
+
+def test_builtin_voice_library_and_session_binding(coach_db, monkeypatch, tmp_path):
+    library_root = tmp_path / "voice-library"
+    samples_dir = library_root / "clone samples"
+    images_dir = library_root / "images"
+    samples_dir.mkdir(parents=True, exist_ok=True)
+    images_dir.mkdir(parents=True, exist_ok=True)
+    (samples_dir / "[Anby] sample.mp3").write_bytes(b"fake-mp3-audio")
+    (images_dir / "anby.jpg").write_bytes(b"fake-image")
+    monkeypatch.setattr(coach_service_module.settings, "COACH_VOICE_LIBRARY_DIR", str(library_root))
+
+    async def scenario():
+        user = await _seed_user("builtin-voice-user")
+        voices = await coach_service.list_builtin_voices()
+        assert len(voices) == 1
+        assert voices[0]["id"] == "anby"
+        assert voices[0]["is_default"] is True
+        assert voices[0]["choice_id"] == "builtin:anby"
+        assert voices[0]["avatar_data_url"].startswith("data:image/")
+
+        session = await coach_service.create_session(
+            user_id=user.id,
+            title="Built-in voice session",
+            target_language="English",
+            voice_profile_id="builtin:anby",
+        )
+        assert session.voice_profile_id == "builtin:anby"
+
+    asyncio.run(scenario())

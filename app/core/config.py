@@ -165,6 +165,24 @@ class Settings(BaseSettings):
     VISION_MODEL: str = "moondream"      # Specialized for image analysis
     EMBEDDING_MODEL: str = "nomic-embed-text" # Local vector embeddings
 
+    # Coach ASR (faster-whisper)
+    COACH_WHISPER_MODEL: str = "small"
+    COACH_WHISPER_MODEL_PATH: str = ""
+    COACH_WHISPER_DOWNLOAD_ROOT: str = ""
+    COACH_WHISPER_LOCAL_FILES_ONLY: bool = True
+    COACH_WHISPER_DEVICE: str = "auto"  # auto | cpu | cuda
+    COACH_WHISPER_COMPUTE_TYPE: str = ""  # empty -> infer from device
+    COACH_TTS_PROVIDER: str = "espeak"  # espeak | cosyvoice
+    COACH_TTS_ALLOW_ESPEAK_FALLBACK: bool = True
+    COACH_COSYVOICE_BASE_URL: str = "http://cosyvoice:5001"
+    COACH_COSYVOICE_MODEL_ID: str = "FunAudioLLM/CosyVoice3-0.5B"
+    COACH_COSYVOICE_DEVICE: str = "auto"  # auto | cpu | cuda
+    COACH_COSYVOICE_LOCAL_FILES_ONLY: bool = True
+    COACH_COSYVOICE_DOWNLOAD_ROOT: str = "/app/data/huggingface/hub"
+    COACH_COSYVOICE_TIMEOUT_SEC: int = 60
+    COACH_VOICE_SECRET_KEY: str = ""
+    COACH_VOICE_LIBRARY_DIR: str = "/app/data/coach_voice_library"
+
     # Ollama runtime tuning
     OLLAMA_NUM_CTX: int | None = None
     OLLAMA_TEMPERATURE: float = 0.3

@@ -1,4 +1,29 @@
 services:
+  cosyvoice:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.cosyvoice
+    container_name: bipod_cosyvoice
+    restart: unless-stopped
+    ports:
+      - "5001:5001"
+    environment:
+      - HF_HOME=/app/data/huggingface
+      - HF_HUB_OFFLINE=${HF_HUB_OFFLINE:-1}
+      - COACH_COSYVOICE_MODEL_ID=${COACH_COSYVOICE_MODEL_ID:-FunAudioLLM/CosyVoice3-0.5B}
+      - COACH_COSYVOICE_DEVICE=${COACH_COSYVOICE_DEVICE:-cpu}
+      - COACH_VOICE_LIBRARY_DIR=/app/data/coach_voice_library
+    volumes:
+      - ./data:/app/data
+      - ./cosyvoice/assets:/app/data/coach_voice_library:ro
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
   ollama:
     image: ollama/ollama:latest
     container_name: bipod_ollama
@@ -45,6 +70,7 @@ services:
     container_name: bipod_brain
     restart: unless-stopped
     depends_on:
+      - cosyvoice
       - ollama
       - imagine
     ports:
@@ -54,6 +80,20 @@ services:
       - ENABLE_IMAGINE=true
       - IMAGINE_API_URL=http://imagine:3333
       - PYTHON_JIT=${PYTHON_JIT:-on}
+      - HF_HOME=/app/data/huggingface
+      - HF_HUB_OFFLINE=${HF_HUB_OFFLINE:-1}
+      - COACH_WHISPER_MODEL=${COACH_WHISPER_MODEL:-small}
+      - COACH_WHISPER_LOCAL_FILES_ONLY=${COACH_WHISPER_LOCAL_FILES_ONLY:-true}
+      - COACH_WHISPER_DOWNLOAD_ROOT=/app/data/huggingface/hub
+      - COACH_WHISPER_DEVICE=${COACH_WHISPER_DEVICE:-cpu}
+      - COACH_TTS_PROVIDER=${COACH_TTS_PROVIDER:-cosyvoice}
+      - COACH_TTS_ALLOW_ESPEAK_FALLBACK=${COACH_TTS_ALLOW_ESPEAK_FALLBACK:-true}
+      - COACH_COSYVOICE_BASE_URL=http://cosyvoice:5001
+      - COACH_COSYVOICE_MODEL_ID=${COACH_COSYVOICE_MODEL_ID:-FunAudioLLM/CosyVoice3-0.5B}
+      - COACH_COSYVOICE_DEVICE=${COACH_COSYVOICE_DEVICE:-cpu}
+      - COACH_COSYVOICE_LOCAL_FILES_ONLY=${COACH_COSYVOICE_LOCAL_FILES_ONLY:-true}
+      - COACH_COSYVOICE_DOWNLOAD_ROOT=/app/data/huggingface/hub
+      - COACH_VOICE_LIBRARY_DIR=/app/data/coach_voice_library
     deploy:
       resources:
         reservations:
@@ -69,7 +109,9 @@ services:
       - video
     volumes:
       - ./app:/app/app
+      - ./frontend:/app/frontend
       - ./data:/app/data
+      - ./cosyvoice/assets:/app/data/coach_voice_library:ro
       - /:/host:rw
 
 networks:

@@ -48,6 +48,7 @@ def test_coach_session_endpoints_delegate_to_service(monkeypatch):
         audio_retention_opt_in=False,
         focus_area="conversation",
         model_id="qwen3:8b",
+        voice_profile_id=None,
         status="active",
         created_at=now,
         updated_at=now,
@@ -72,6 +73,7 @@ def test_coach_session_endpoints_delegate_to_service(monkeypatch):
                 "audio_retention_opt_in": False,
                 "focus_area": "conversation",
                 "model_id": "qwen3:8b",
+                "voice_profile_id": None,
                 "status": "active",
                 "created_at": now,
                 "updated_at": now,
@@ -198,11 +200,13 @@ def test_coach_stream_turn_emits_ndjson_events(monkeypatch):
         audio,
         transcript_hint=None,
         preferred_model=None,
+        persona_style=None,
     ):
         assert user_id == 7
         assert session_id == expected_session_id
         assert transcript_hint == "coach me"
         assert preferred_model == "small-model"
+        assert persona_style == "calm tactical persona"
         seen_audio_reads.append(await audio.read())
         await audio.seek(0)
         yield {"type": "stt_partial", "text": "coach"}
@@ -218,12 +222,13 @@ def test_coach_stream_turn_emits_ndjson_events(monkeypatch):
     response = asyncio.run(
         coach_module.stream_turn(
             session_id=session_id,  # type: ignore[arg-type]
-            audio=_make_upload_file(b"audio-bytes"),
-            transcript_hint="coach me",
-            preferred_model="small-model",
-            user_id=7,
+                audio=_make_upload_file(b"audio-bytes"),
+                transcript_hint="coach me",
+                preferred_model="small-model",
+                persona_style="calm tactical persona",
+                user_id=7,
+            )
         )
-    )
 
     raw_body = b"".join(asyncio.run(_collect_stream_chunks(response))).decode("utf-8")
     events = [json.loads(line) for line in raw_body.splitlines() if line]
@@ -262,3 +267,208 @@ def test_coach_stream_turn_returns_clear_errors(monkeypatch):
 
     assert exc_info.value.status_code == 404
     assert "Session not found" in exc_info.value.detail
+
+
+def test_coach_end_session_returns_summary(monkeypatch):
+    session_id = str(uuid4())
+    expected_session_id = session_id
+
+    async def fake_end_session(user_id, session_id):
+        assert user_id == 5
+        assert session_id == expected_session_id
+        return {
+            "session_id": expected_session_id,
+            "status": "completed",
+            "subject": "Travel",
+            "turn_count": 3,
+            "average_score": 84.3,
+            "latest_score": 90,
+            "mistake_counts_by_category": {"grammar": 2},
+            "feedback_summary": "Good flow, improve grammar precision.",
+            "strengths": ["Stayed on topic"],
+            "improvement_points": ["Use cleaner tense consistency"],
+        }
+
+    monkeypatch.setattr(coach_module.coach_service, "end_session", fake_end_session)
+
+    summary = asyncio.run(coach_module.end_session(session_id=session_id, user_id=5))  # type: ignore[arg-type]
+    assert summary["status"] == "completed"
+    assert summary["turn_count"] == 3
+    assert summary["average_score"] == 84.3
+
+
+def test_coach_delete_session_endpoint(monkeypatch):
+    session_id = str(uuid4())
+    expected_session_id = session_id
+
+    async def fake_delete_session(session_id, user_id):
+        assert user_id == 12
+        assert session_id == expected_session_id
+        return True
+
+    monkeypatch.setattr(coach_module.coach_service, "delete_session", fake_delete_session)
+
+    payload = asyncio.run(coach_module.delete_session(session_id=session_id, user_id=12))  # type: ignore[arg-type]
+    assert payload == {"deleted": True, "session_id": expected_session_id}
+
+
+def test_coach_tts_endpoint_returns_audio(monkeypatch):
+    captured = {}
+
+    async def fake_synthesize_reply_audio(
+        *,
+        text,
+        language,
+        voice_preset,
+        persona_style=None,
+        tts_provider=None,
+        voice_mode=None,
+        voice_profile_id=None,
+        reference_clip_id=None,
+        builtin_voice_id=None,
+        user_id=None,
+    ):
+        captured["text"] = text
+        captured["language"] = language
+        captured["voice_preset"] = voice_preset
+        captured["persona_style"] = persona_style
+        captured["tts_provider"] = tts_provider
+        captured["voice_mode"] = voice_mode
+        captured["voice_profile_id"] = voice_profile_id
+        captured["reference_clip_id"] = reference_clip_id
+        captured["builtin_voice_id"] = builtin_voice_id
+        captured["user_id"] = user_id
+        return b"RIFF....WAVE", "audio/wav"
+
+    monkeypatch.setattr(coach_module.coach_service, "synthesize_reply_audio", fake_synthesize_reply_audio)
+
+    response = asyncio.run(
+        coach_module.synthesize_tts(
+            coach_module.CoachTtsRequest(
+                text="Hello there",
+                language="English",
+                voice_preset="anby",
+                persona_style="Anby",
+                tts_provider="cosyvoice",
+                voice_mode="preset",
+            ),
+            user_id=3,
+        )
+    )
+
+    assert captured == {
+        "text": "Hello there",
+        "language": "English",
+        "voice_preset": "anby",
+        "persona_style": "Anby",
+        "tts_provider": "cosyvoice",
+        "voice_mode": "preset",
+        "voice_profile_id": None,
+        "reference_clip_id": None,
+        "builtin_voice_id": None,
+        "user_id": 3,
+    }
+    assert response.media_type == "audio/wav"
+    assert response.body == b"RIFF....WAVE"
+
+
+def test_coach_voice_profile_endpoints(monkeypatch):
+    now = datetime(2026, 3, 19, tzinfo=timezone.utc)
+    uploaded = {
+        "id": "sample-1",
+        "title": "sample.wav",
+        "mime_type": "audio/wav",
+        "file_size_bytes": 100,
+        "language": "English",
+        "created_at": now,
+    }
+    created_profile = {
+        "id": "profile-1",
+        "name": "My Voice",
+        "provider": "cosyvoice",
+        "language": "English",
+        "status": "active",
+        "created_at": now,
+        "updated_at": now,
+    }
+
+    async def fake_save_voice_reference(*, user_id, file, title, language):
+        assert user_id == 7
+        assert language == "English"
+        assert title == "sample.wav"
+        assert await file.read() == b"wav-bytes"
+        await file.seek(0)
+        return uploaded
+
+    async def fake_create_voice_profile(*, user_id, name, reference_clip_id, language):
+        assert user_id == 7
+        assert name == "My Voice"
+        assert reference_clip_id == "sample-1"
+        assert language == "English"
+        return created_profile
+
+    async def fake_list_voice_profiles(*, user_id):
+        assert user_id == 7
+        return [created_profile]
+
+    async def fake_delete_voice_profile(*, profile_id, user_id):
+        assert profile_id == "profile-1"
+        assert user_id == 7
+        return True
+
+    monkeypatch.setattr(coach_module.coach_service, "save_voice_reference", fake_save_voice_reference)
+    monkeypatch.setattr(coach_module.coach_service, "create_voice_profile", fake_create_voice_profile)
+    monkeypatch.setattr(coach_module.coach_service, "list_voice_profiles", fake_list_voice_profiles)
+    monkeypatch.setattr(coach_module.coach_service, "delete_voice_profile", fake_delete_voice_profile)
+
+    uploaded_payload = asyncio.run(
+        coach_module.upload_voice_reference(
+            file=_make_upload_file(b"wav-bytes"),
+            title="sample.wav",
+            language="English",
+            user_id=7,
+        )
+    )
+    assert uploaded_payload["id"] == "sample-1"
+
+    created_payload = asyncio.run(
+        coach_module.create_voice_profile(
+            payload=coach_module.CoachVoiceProfileCreate(
+                name="My Voice",
+                reference_clip_id="sample-1",
+                language="English",
+            ),
+            user_id=7,
+        )
+    )
+    assert created_payload["id"] == "profile-1"
+
+    listed_payload = asyncio.run(coach_module.list_voice_profiles(user_id=7))
+    assert len(listed_payload) == 1
+    assert listed_payload[0]["name"] == "My Voice"
+
+    deleted_payload = asyncio.run(coach_module.delete_voice_profile(profile_id="profile-1", user_id=7))
+    assert deleted_payload == {"deleted": True, "profile_id": "profile-1"}
+
+
+def test_coach_builtin_voice_library_endpoint(monkeypatch):
+    payload = [
+        {
+            "id": "anby",
+            "name": "Anby",
+            "choice_id": "builtin:anby",
+            "voice_mode": "preset",
+            "voice_preset": "default",
+            "provider": "cosyvoice",
+            "is_default": True,
+            "is_available": True,
+            "avatar_data_url": "data:image/jpeg;base64,AAA",
+        }
+    ]
+
+    async def fake_list_builtin_voices():
+        return payload
+
+    monkeypatch.setattr(coach_module.coach_service, "list_builtin_voices", fake_list_builtin_voices)
+    result = asyncio.run(coach_module.list_builtin_voices(user_id=7))
+    assert result == payload

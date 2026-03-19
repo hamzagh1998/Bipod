@@ -116,6 +116,7 @@ class CoachSessionCreate(BaseModel):
     audio_retention_opt_in: bool = False
     focus_area: Optional[str] = None
     model_id: Optional[str] = None
+    voice_profile_id: Optional[str] = None
 
 
 class CoachSessionResponse(BaseModel):
@@ -128,6 +129,7 @@ class CoachSessionResponse(BaseModel):
     audio_retention_opt_in: bool = False
     focus_area: Optional[str] = None
     model_id: Optional[str] = None
+    voice_profile_id: Optional[str] = None
     status: str
     created_at: datetime
     updated_at: datetime
@@ -198,6 +200,59 @@ class CoachModelSelectionResponse(BaseModel):
     selected_model: str
     candidate_models: List[str] = Field(default_factory=list)
     latency_budget_ms: Optional[int] = None
+
+
+class CoachTtsRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=4000)
+    language: Optional[str] = Field(default="English", max_length=60)
+    voice_preset: Optional[str] = Field(default="default", max_length=40)
+    persona_style: Optional[str] = Field(default=None, max_length=2000)
+    tts_provider: Optional[str] = Field(default=None, max_length=40)
+    voice_mode: Optional[Literal["preset", "cloned_profile", "cloned_session"]] = Field(default="preset")
+    voice_profile_id: Optional[str] = Field(default=None, max_length=120)
+    reference_clip_id: Optional[str] = Field(default=None, max_length=120)
+    builtin_voice_id: Optional[str] = Field(default=None, max_length=60)
+
+
+class CoachVoiceReferenceResponse(BaseModel):
+    id: str
+    title: str
+    mime_type: str
+    file_size_bytes: int
+    language: Optional[str] = None
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class CoachVoiceProfileCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    reference_clip_id: str = Field(min_length=1, max_length=120)
+    language: Optional[str] = Field(default="English", max_length=60)
+
+
+class CoachVoiceProfileResponse(BaseModel):
+    id: str
+    name: str
+    provider: str
+    language: Optional[str] = None
+    status: str
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class CoachBuiltinVoiceResponse(BaseModel):
+    id: str
+    name: str
+    choice_id: str
+    voice_mode: str
+    voice_preset: str
+    provider: str
+    is_default: bool = False
+    is_available: bool = False
+    avatar_data_url: Optional[str] = None
 
 
 class CoachEvent(BaseModel):

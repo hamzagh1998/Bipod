@@ -51,7 +51,7 @@ def test_sqlite_schema_patches_adds_missing_coach_columns(tmp_path):
         session_cols = _columns(conn, "coach_sessions")
         turn_cols = _columns(conn, "coach_turns")
 
-        assert {"target_language", "native_language", "cefr_level", "audio_retention_opt_in"}.issubset(session_cols)
+        assert {"target_language", "native_language", "cefr_level", "audio_retention_opt_in", "voice_profile_id"}.issubset(session_cols)
         assert {"transcript", "reply", "correction", "explanation", "score"}.issubset(turn_cols)
 
     engine.dispose()

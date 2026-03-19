@@ -6,9 +6,14 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.encoders import jsonable_encoder
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 
-from app.api.schemas import CoachSessionCreate
+from app.api.schemas import (
+    CoachBuiltinVoiceResponse,
+    CoachSessionCreate,
+    CoachTtsRequest,
+    CoachVoiceProfileCreate,
+)
 from app.services.auth_service import auth_service
 from app.services.coach_service import coach_service
 
@@ -60,6 +65,7 @@ def _serialize_session(session) -> dict:
         "audio_retention_opt_in": session.audio_retention_opt_in,
         "focus_area": session.focus_area,
         "model_id": session.model_id,
+        "voice_profile_id": session.voice_profile_id,
         "status": session.status,
         "created_at": session.created_at,
         "updated_at": session.updated_at,
@@ -73,16 +79,20 @@ async def create_session(
     payload: CoachSessionCreate,
     user_id: int = Depends(auth_service.get_current_user),
 ):
-    created = await coach_service.create_session(
-        user_id=user_id,
-        title=payload.title,
-        target_language=payload.target_language,
-        native_language=payload.native_language,
-        cefr_level=payload.cefr_level,
-        audio_retention_opt_in=payload.audio_retention_opt_in,
-        focus_area=payload.focus_area,
-        model_id=payload.model_id,
-    )
+    try:
+        created = await coach_service.create_session(
+            user_id=user_id,
+            title=payload.title,
+            target_language=payload.target_language,
+            native_language=payload.native_language,
+            cefr_level=payload.cefr_level,
+            audio_retention_opt_in=payload.audio_retention_opt_in,
+            focus_area=payload.focus_area,
+            model_id=payload.model_id,
+            voice_profile_id=payload.voice_profile_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     sessions = await coach_service.list_sessions(user_id)
     for session in sessions:
         if session["id"] == created.id:
@@ -104,6 +114,17 @@ async def get_session(
     if not session:
         raise _session_not_found(str(session_id))
     return _serialize_session(session)
+
+
+@router.delete("/sessions/{session_id}")
+async def delete_session(
+    session_id: UUID,
+    user_id: int = Depends(auth_service.get_current_user),
+):
+    deleted = await coach_service.delete_session(str(session_id), user_id)
+    if not deleted:
+        raise _session_not_found(str(session_id))
+    return {"deleted": True, "session_id": str(session_id)}
 
 
 @router.get("/sessions/{session_id}/turns")
@@ -175,6 +196,17 @@ async def progress(
     return await coach_service.progress(user_id=user_id, session_id=str(session_id))
 
 
+@router.post("/sessions/{session_id}/end")
+async def end_session(
+    session_id: UUID,
+    user_id: int = Depends(auth_service.get_current_user),
+):
+    summary = await coach_service.end_session(user_id=user_id, session_id=str(session_id))
+    if not summary:
+        raise _session_not_found(str(session_id))
+    return summary
+
+
 @router.get("/progress")
 async def progress_summary(user_id: int = Depends(auth_service.get_current_user)):
     return await coach_service.progress_summary(user_id=user_id)
@@ -186,6 +218,7 @@ async def _stream_turn_impl(
     audio: UploadFile,
     transcript_hint: Optional[str],
     preferred_model: Optional[str],
+    persona_style: Optional[str],
     user_id: int,
 ) -> StreamingResponse:
     if not audio.filename:
@@ -210,6 +243,7 @@ async def _stream_turn_impl(
                 audio=audio,
                 transcript_hint=transcript_hint,
                 preferred_model=preferred_model,
+                persona_style=persona_style,
             ):
                 normalized = _validate_stream_event(event)
                 event_type = str(normalized.pop("type"))
@@ -245,6 +279,7 @@ async def stream_turn_by_path(
     audio: UploadFile = File(...),
     transcript_hint: Optional[str] = Form(default=None, max_length=4000),
     preferred_model: Optional[str] = Form(default=None, min_length=1, max_length=120),
+    persona_style: Optional[str] = Form(default=None, max_length=2000),
     user_id: int = Depends(auth_service.get_current_user),
 ):
     return await _stream_turn_impl(
@@ -252,6 +287,7 @@ async def stream_turn_by_path(
         audio=audio,
         transcript_hint=transcript_hint,
         preferred_model=preferred_model,
+        persona_style=persona_style,
         user_id=user_id,
     )
 
@@ -262,6 +298,7 @@ async def stream_turn(
     session_id: str = Form(..., min_length=1, max_length=120),
     transcript_hint: Optional[str] = Form(default=None, max_length=4000),
     preferred_model: Optional[str] = Form(default=None, min_length=1, max_length=120),
+    persona_style: Optional[str] = Form(default=None, max_length=2000),
     user_id: int = Depends(auth_service.get_current_user),
 ):
     return await _stream_turn_impl(
@@ -269,5 +306,94 @@ async def stream_turn(
         audio=audio,
         transcript_hint=transcript_hint,
         preferred_model=preferred_model,
+        persona_style=persona_style,
         user_id=user_id,
     )
+
+
+@router.post("/tts")
+async def synthesize_tts(
+    payload: CoachTtsRequest,
+    user_id: int = Depends(auth_service.get_current_user),
+):
+    try:
+        audio_bytes, media_type = await coach_service.synthesize_reply_audio(
+            text=payload.text,
+            language=payload.language,
+            voice_preset=payload.voice_preset,
+            persona_style=payload.persona_style,
+            tts_provider=payload.tts_provider,
+            voice_mode=payload.voice_mode,
+            voice_profile_id=payload.voice_profile_id,
+            reference_clip_id=payload.reference_clip_id,
+            builtin_voice_id=payload.builtin_voice_id,
+            user_id=user_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    return Response(
+        content=audio_bytes,
+        media_type=media_type,
+        headers={
+            "Cache-Control": "no-store",
+            "X-Coach-TTS": "coach",
+        },
+    )
+
+
+@router.post("/voices/reference")
+async def upload_voice_reference(
+    file: UploadFile = File(...),
+    title: Optional[str] = Form(default=None, max_length=100),
+    language: Optional[str] = Form(default="English", max_length=60),
+    user_id: int = Depends(auth_service.get_current_user),
+):
+    try:
+        return await coach_service.save_voice_reference(
+            user_id=user_id,
+            file=file,
+            title=title,
+            language=language,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/voices/profiles")
+async def create_voice_profile(
+    payload: CoachVoiceProfileCreate,
+    user_id: int = Depends(auth_service.get_current_user),
+):
+    try:
+        return await coach_service.create_voice_profile(
+            user_id=user_id,
+            name=payload.name,
+            reference_clip_id=payload.reference_clip_id,
+            language=payload.language,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/voices/profiles")
+async def list_voice_profiles(user_id: int = Depends(auth_service.get_current_user)):
+    return await coach_service.list_voice_profiles(user_id=user_id)
+
+
+@router.get("/voices/library", response_model=list[CoachBuiltinVoiceResponse])
+async def list_builtin_voices(user_id: int = Depends(auth_service.get_current_user)):
+    return await coach_service.list_builtin_voices()
+
+
+@router.delete("/voices/profiles/{profile_id}")
+async def delete_voice_profile(
+    profile_id: str,
+    user_id: int = Depends(auth_service.get_current_user),
+):
+    deleted = await coach_service.delete_voice_profile(profile_id=profile_id, user_id=user_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail=f"Voice profile not found: {profile_id}")
+    return {"deleted": True, "profile_id": profile_id}
