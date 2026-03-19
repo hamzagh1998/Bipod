@@ -316,6 +316,7 @@ def test_transcript_evaluable_gate_filters_noise_placeholders():
     assert coach_service._is_transcript_evaluable("captured 93201 bytes of audio") is False
     assert coach_service._is_transcript_evaluable("cough") is False
     assert coach_service._is_transcript_evaluable("uh um") is False
+    assert coach_service._is_transcript_evaluable("oh") is False
     assert coach_service._is_transcript_evaluable("I usually wake up at seven.") is True
 
 
@@ -324,6 +325,67 @@ def test_target_language_code_mapping():
     assert coach_service._target_language_code("Spanish") == "es"
     assert coach_service._target_language_code("French (fr)") == "fr"
     assert coach_service._target_language_code("ar") == "ar"
+
+
+def test_coach_hardware_profile_gpu_constrained(monkeypatch):
+    monkeypatch.setattr(coach_service_module.settings, "USE_GPU", True)
+    monkeypatch.setattr(coach_service_module.settings, "GPU_VRAM", 8.0)
+    monkeypatch.setattr(coach_service_module.settings, "COACH_RUNTIME_PROFILE", "auto")
+    monkeypatch.setattr(coach_service_module.settings, "COACH_HIGH_VRAM_THRESHOLD_GB", 16.0)
+    monkeypatch.delenv("COACH_RUNTIME_PROFILE", raising=False)
+    profile = coach_service._coach_hardware_profile()
+    assert profile["name"] == "gpu_constrained"
+    assert profile["asr_device"] == "cpu"
+    assert profile["tts_device"] == "cpu"
+    assert profile["asr_fast_model"] == "medium"
+
+
+def test_coach_hardware_profile_gpu_full(monkeypatch):
+    monkeypatch.setattr(coach_service_module.settings, "USE_GPU", True)
+    monkeypatch.setattr(coach_service_module.settings, "GPU_VRAM", 24.0)
+    monkeypatch.setattr(coach_service_module.settings, "COACH_RUNTIME_PROFILE", "auto")
+    monkeypatch.setattr(coach_service_module.settings, "COACH_HIGH_VRAM_THRESHOLD_GB", 16.0)
+    monkeypatch.delenv("COACH_RUNTIME_PROFILE", raising=False)
+    profile = coach_service._coach_hardware_profile()
+    assert profile["name"] == "gpu_full"
+    assert profile["asr_device"] == "cuda"
+    assert profile["tts_device"] == "cuda"
+    assert profile["asr_fast_model"] == "large-v3"
+
+
+def test_fast_whisper_model_ref_uses_profile_when_auto(monkeypatch):
+    monkeypatch.setattr(coach_service_module.settings, "USE_GPU", True)
+    monkeypatch.setattr(coach_service_module.settings, "GPU_VRAM", 24.0)
+    monkeypatch.setattr(coach_service_module.settings, "COACH_WHISPER_FAST_MODEL", "auto")
+    monkeypatch.setattr(coach_service_module.settings, "COACH_WHISPER_MODEL", "auto")
+    monkeypatch.setattr(coach_service_module.settings, "COACH_WHISPER_MODEL_PATH", "")
+    monkeypatch.delenv("COACH_WHISPER_FAST_MODEL", raising=False)
+    monkeypatch.delenv("COACH_WHISPER_MODEL", raising=False)
+    monkeypatch.delenv("COACH_WHISPER_MODEL_PATH", raising=False)
+    model_ref = coach_service._fast_whisper_model_ref()
+    assert model_ref == "large-v3"
+
+
+def test_supported_languages_contains_english():
+    payload = coach_service.supported_languages()
+    assert payload
+    english = next((item for item in payload if item["name"] == "English"), None)
+    assert english is not None
+    assert english["selectable"] is True
+
+
+def test_create_session_rejects_unsupported_language(coach_db):
+    async def scenario():
+        user = await _seed_user("unsupported-language-user")
+        with pytest.raises(ValueError) as exc_info:
+            await coach_service.create_session(
+                user_id=user.id,
+                title="Invalid language",
+                target_language="Klingon",
+            )
+        assert "not supported" in str(exc_info.value)
+
+    asyncio.run(scenario())
 
 
 def test_delete_session_removes_owned_session(coach_db):
@@ -348,6 +410,197 @@ def test_resolve_tts_voice_preset_anby():
     assert voice.startswith("en")
     assert rate == 145
     assert pitch == 38
+
+
+def test_get_tts_status_returns_ready_for_espeak(monkeypatch):
+    monkeypatch.setenv("COACH_TTS_PROVIDER", "espeak")
+
+    async def scenario():
+        payload = await coach_service.get_tts_status(warm=True)
+        assert payload["engine"] == "espeak"
+        assert payload["ready"] is True
+        assert payload["state"] == "ready"
+
+    asyncio.run(scenario())
+
+
+def test_get_tts_status_normalizes_cosyvoice_payload(monkeypatch):
+    captured = {}
+
+    class _FakeResponse:
+        status_code = 200
+
+        def json(self):
+            return {
+                "ok": True,
+                "engine": "cosyvoice",
+                "ready": False,
+                "state": "downloading",
+                "detail": "Downloading model",
+                "model_id": "iic/CosyVoice-300M",
+                "loaded_model_id": "",
+                "warmup_active": True,
+                "updated_at": 456.0,
+            }
+
+    class _FakeAsyncClient:
+        def __init__(self, *args, **kwargs):
+            del args, kwargs
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            del exc_type, exc, tb
+            return False
+
+        async def get(self, url, params=None):
+            captured["url"] = url
+            captured["params"] = params
+            return _FakeResponse()
+
+    monkeypatch.setenv("COACH_TTS_PROVIDER", "cosyvoice")
+    monkeypatch.setenv("COACH_COSYVOICE_BASE_URL", "http://cosyvoice:5001")
+    monkeypatch.setenv("COACH_COSYVOICE_MODEL_ID", "iic/CosyVoice-300M")
+    monkeypatch.setattr(coach_service_module.httpx, "AsyncClient", _FakeAsyncClient)
+
+    async def scenario():
+        payload = await coach_service.get_tts_status(warm=True)
+        assert payload["engine"] == "cosyvoice"
+        assert payload["provider"] == "cosyvoice"
+        assert payload["ready"] is False
+        assert payload["state"] == "downloading"
+        assert payload["warmup_active"] is True
+        assert payload["model_id"] == "iic/CosyVoice-300M"
+
+    asyncio.run(scenario())
+    assert captured["url"] == "http://cosyvoice:5001/status"
+    assert captured["params"]["warm"] == "true"
+    assert captured["params"]["runtime_device"] in {"cpu", "cuda"}
+
+
+def test_get_runtime_status_aggregates_components(monkeypatch):
+    async def fake_get_tts_status(*, warm):
+        assert warm is True
+        return {"engine": "cosyvoice", "ready": True, "state": "ready", "detail": "ok"}
+
+    async def fake_asr_status(*, warm):
+        assert warm is True
+        return {"engine": "faster-whisper", "ready": True, "state": "ready", "detail": "ok"}
+
+    async def fake_ollama_status(*, warm, mode):
+        assert warm is True
+        assert mode == "voice"
+        return {"engine": "ollama", "ready": True, "state": "ready", "detail": "ok"}
+
+    async def fake_languagetool_status():
+        return {"engine": "languagetool", "enabled": True, "ready": False, "state": "error", "detail": "offline"}
+
+    monkeypatch.setattr(coach_service, "get_tts_status", fake_get_tts_status)
+    monkeypatch.setattr(coach_service, "_asr_status", fake_asr_status)
+    monkeypatch.setattr(coach_service, "_ollama_status", fake_ollama_status)
+    monkeypatch.setattr(coach_service, "_languagetool_status", fake_languagetool_status)
+    monkeypatch.setattr(
+        coach_service,
+        "_coach_hardware_profile",
+        lambda: {
+            "name": "gpu_constrained",
+            "use_gpu": True,
+            "gpu_vram_gb": 8.0,
+            "high_vram_threshold_gb": 16.0,
+            "llm_primary_model": "qwen3:8b",
+            "asr_device": "cpu",
+            "asr_fast_model": "medium",
+            "asr_accurate_model": "large-v3",
+            "tts_device": "cpu",
+        },
+    )
+
+    async def scenario():
+        payload = await coach_service.get_runtime_status(warm=True, mode="voice")
+        assert payload["ok"] is True
+        assert payload["mode"] == "voice"
+        assert payload["ready"] is True
+        assert payload["components"]["languagetool"]["ready"] is False
+        assert payload["runtime_profile"]["name"] == "gpu_constrained"
+
+    asyncio.run(scenario())
+
+
+def test_process_text_turn_adds_languagetool_findings(coach_db, monkeypatch):
+    async def scenario():
+        user = await _seed_user("text-user")
+        session = await coach_service.create_session(
+            user_id=user.id,
+            title="Text mode",
+            target_language="English",
+            focus_area="Daily life",
+        )
+
+        async def fake_available_models():
+            return ["qwen3:8b"]
+
+        async def fake_coach_with_model(**_kwargs):
+            return (
+                {
+                    "reply": "Nice. Tell me one more detail.",
+                    "follow_up_question": "What time do you start work?",
+                    "score": 84,
+                    "correction": "Use present simple consistently.",
+                    "explanation": "Target: keep tense consistent. Native: حافظ على نفس الزمن.",
+                    "mistakes": [
+                        {
+                            "category": "grammar",
+                            "detail": "Tense shift detected.",
+                            "severity": "medium",
+                            "suggestion": "Use present simple.",
+                        }
+                    ],
+                },
+                120,
+            )
+
+        async def fake_languagetool_check(*, text, language):
+            assert "usually" in text
+            assert language == "English"
+            return [
+                {
+                    "category": "grammar",
+                    "detail": "Possible article issue.",
+                    "severity": "low",
+                    "suggestion": "Add 'the'.",
+                    "metadata": {"source": "languagetool"},
+                }
+            ]
+
+        monkeypatch.setattr(coach_service, "_available_ollama_models", fake_available_models)
+        monkeypatch.setattr(coach_service, "_coach_with_model", fake_coach_with_model)
+        monkeypatch.setattr(coach_service, "_languagetool_check", fake_languagetool_check)
+
+        payload = await coach_service.process_text_turn(
+            user_id=user.id,
+            session_id=session.id,
+            text="I usually wake up at 6 and go work.",
+            preferred_model="qwen3:8b",
+            persona_style="calm tactical persona",
+        )
+        assert payload["session_id"] == session.id
+        assert payload["score"] == 84
+        assert len(payload["mistakes"]) >= 2
+        assert any("Possible article issue." in str(item.get("detail")) for item in payload["mistakes"])
+        assert "LanguageTool flagged" in str(payload.get("explanation") or "")
+
+    asyncio.run(scenario())
+
+
+def test_asr_confidence_band_low_for_noise():
+    score, band = coach_service._asr_confidence_band(
+        avg_logprob=-1.6,
+        no_speech_prob=0.9,
+        text="uh um",
+    )
+    assert band == "low"
+    assert score < 0.45
 
 
 def test_synthesize_reply_audio_requires_engine(monkeypatch):

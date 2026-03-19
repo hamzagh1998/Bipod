@@ -15,11 +15,11 @@ import uuid
 from typing import Any, AsyncIterator, Callable, Dict, List, Mapping, Optional, Sequence
 
 import httpx
-from cryptography.fernet import Fernet, InvalidToken
+from cryptography.fernet import Fernet, InvalidToken # type: ignore
 from sqlalchemy import desc, func, select
 from sqlalchemy.orm import selectinload
 
-from app.core.config import settings
+from app.core.config import recommend_coach_runtime_profile, settings
 from app.core.logger import get_logger
 from app.db.database import AsyncSessionLocal
 from app.db.models import CoachMistake, CoachSession, CoachTurn, CoachVoiceProfile, CoachVoiceSample
@@ -85,15 +85,146 @@ class CoachService:
         "goku": "Goku",
         "gute": "Gute",
     }
+    CODE_TO_LANGUAGE_NAME = {
+        "ar": "Arabic",
+        "de": "German",
+        "el": "Greek",
+        "en": "English",
+        "es": "Spanish",
+        "fr": "French",
+        "hi": "Hindi",
+        "it": "Italian",
+        "ja": "Japanese",
+        "ko": "Korean",
+        "nl": "Dutch",
+        "pl": "Polish",
+        "pt": "Portuguese",
+        "ru": "Russian",
+        "sv": "Swedish",
+        "tr": "Turkish",
+        "uk": "Ukrainian",
+        "ur": "Urdu",
+        "zh": "Chinese",
+    }
 
     def __init__(self) -> None:
         self.base_url = settings.OLLAMA_BASE_URL
         self.default_latency_budget_ms = 15000.0
         self._whisper_model = None
+        self._whisper_accurate_model = None
         self._whisper_lock = asyncio.Lock()
         self._whisper_runtime_device: Optional[str] = None
+        self._whisper_accurate_runtime_device: Optional[str] = None
         self._voice_cipher: Optional[Fernet] = None
         self._voice_cipher_key: Optional[str] = None
+
+    def _env_text(self, key: str, fallback: Any) -> str:
+        return str(os.environ.get(key, fallback) or fallback).strip()
+
+    def _env_bool(self, key: str, fallback: bool) -> bool:
+        raw = self._env_text(key, str(fallback)).lower()
+        if raw == "auto":
+            return fallback
+        return raw in {"1", "true", "yes", "on"}
+
+    def _env_float(self, key: str, fallback: float, *, minimum: Optional[float] = None) -> float:
+        raw = self._env_text(key, fallback)
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            value = float(fallback)
+        if minimum is not None:
+            value = max(minimum, value)
+        return value
+
+    def _coach_hardware_profile(self) -> dict[str, Any]:
+        high_vram_threshold = self._env_float(
+            "COACH_HIGH_VRAM_THRESHOLD_GB",
+            float(settings.COACH_HIGH_VRAM_THRESHOLD_GB),
+            minimum=8.0,
+        )
+        override = self._env_text("COACH_RUNTIME_PROFILE", settings.COACH_RUNTIME_PROFILE).lower()
+        if override not in {"auto", "cpu", "gpu_constrained", "gpu_full"}:
+            override = "auto"
+
+        if override == "auto":
+            profile_name = recommend_coach_runtime_profile(
+                use_gpu=bool(settings.USE_GPU),
+                gpu_vram_gb=max(0.0, float(settings.GPU_VRAM or 0.0)),
+                high_vram_threshold_gb=high_vram_threshold,
+            )
+        else:
+            profile_name = override
+
+        if profile_name == "gpu_full":
+            llm_order = [settings.HEAVY_MODEL, settings.SMART_MODEL, settings.MEDIUM_MODEL, settings.LIGHT_MODEL]
+            return {
+                "name": profile_name,
+                "high_vram_threshold_gb": high_vram_threshold,
+                "use_gpu": bool(settings.USE_GPU),
+                "gpu_vram_gb": max(0.0, float(settings.GPU_VRAM or 0.0)),
+                "llm_primary_model": settings.HEAVY_MODEL,
+                "llm_candidate_order": llm_order,
+                "asr_device": "cuda",
+                "asr_compute_type": "float16",
+                "asr_fast_model": "large-v3",
+                "asr_accurate_model": "large-v3",
+                "asr_retry_enabled": False,
+                "asr_retry_threshold": 0.35,
+                "asr_preload_accurate": True,
+                "tts_device": "cuda",
+            }
+
+        if profile_name == "cpu":
+            llm_order = [settings.MEDIUM_MODEL, settings.SMART_MODEL, settings.LIGHT_MODEL, settings.HEAVY_MODEL]
+            if settings.HARDWARE_TARGET == "arm64":
+                llm_order = [settings.LIGHT_MODEL, settings.MEDIUM_MODEL, settings.SMART_MODEL, settings.HEAVY_MODEL]
+            return {
+                "name": profile_name,
+                "high_vram_threshold_gb": high_vram_threshold,
+                "use_gpu": bool(settings.USE_GPU),
+                "gpu_vram_gb": max(0.0, float(settings.GPU_VRAM or 0.0)),
+                "llm_primary_model": llm_order[0],
+                "llm_candidate_order": llm_order,
+                "asr_device": "cpu",
+                "asr_compute_type": "int8",
+                "asr_fast_model": "medium",
+                "asr_accurate_model": "large-v3",
+                "asr_retry_enabled": True,
+                "asr_retry_threshold": 0.45,
+                "asr_preload_accurate": False,
+                "tts_device": "cpu",
+            }
+
+        # gpu_constrained
+        llm_order = [settings.HEAVY_MODEL, settings.SMART_MODEL, settings.MEDIUM_MODEL, settings.LIGHT_MODEL]
+        return {
+            "name": "gpu_constrained",
+            "high_vram_threshold_gb": high_vram_threshold,
+            "use_gpu": bool(settings.USE_GPU),
+            "gpu_vram_gb": max(0.0, float(settings.GPU_VRAM or 0.0)),
+            "llm_primary_model": settings.HEAVY_MODEL,
+            "llm_candidate_order": llm_order,
+            "asr_device": "cpu",
+            "asr_compute_type": "int8",
+            "asr_fast_model": "medium",
+            "asr_accurate_model": "large-v3",
+            "asr_retry_enabled": True,
+            "asr_retry_threshold": 0.45,
+            "asr_preload_accurate": False,
+            "tts_device": "cpu",
+        }
+
+    def _resolve_runtime_device(self, *, env_key: str, configured_default: str, profile_default: str) -> str:
+        configured = self._env_text(env_key, configured_default).lower()
+        if configured in {"cpu", "cuda"}:
+            return configured
+        if configured != "auto":
+            configured = "auto"
+        resolved = profile_default if configured == "auto" else configured
+        if resolved == "cuda" and not settings.USE_GPU:
+            return "cpu"
+        return resolved
 
     def _normalize_model_candidates(self, models: Sequence[str]) -> List[str]:
         seen: set[str] = set()
@@ -112,14 +243,8 @@ class CoachService:
     ) -> List[str]:
         if candidate_order is not None:
             return self._normalize_model_candidates(candidate_order)
-        return self._normalize_model_candidates(
-            [
-                settings.HEAVY_MODEL,
-                settings.SMART_MODEL,
-                settings.MEDIUM_MODEL,
-                settings.LIGHT_MODEL,
-            ]
-        )
+        profile = self._coach_hardware_profile()
+        return self._normalize_model_candidates(profile.get("llm_candidate_order", []))
 
     def select_model(
         self,
@@ -169,6 +294,32 @@ class CoachService:
         mistake_count = sum(len(turn.mistakes) for turn in session.turns)
         return turn_count, mistake_count
 
+    def _serialize_turn(self, turn: CoachTurn) -> dict[str, Any]:
+        return {
+            "id": turn.id,
+            "session_id": turn.session_id,
+            "user_id": turn.user_id,
+            "turn_index": turn.turn_index,
+            "transcript": turn.transcript,
+            "reply": turn.reply,
+            "correction": turn.correction,
+            "explanation": turn.explanation,
+            "score": turn.score,
+            "model_id": turn.model_id,
+            "latency_ms": turn.latency_ms,
+            "created_at": turn.created_at,
+            "mistakes": [
+                {
+                    "id": mistake.id,
+                    "category": mistake.category,
+                    "detail": mistake.detail,
+                    "severity": mistake.severity,
+                    "suggestion": mistake.suggestion,
+                }
+                for mistake in (turn.mistakes or [])
+            ],
+        }
+
     async def create_session(
         self,
         user_id: int,
@@ -182,6 +333,9 @@ class CoachService:
         voice_profile_id: Optional[str] = None,
     ) -> CoachSession:
         session_id = str(uuid.uuid4())
+        normalized_target_language = self._resolve_supported_language_name(target_language)
+        if normalized_target_language is None:
+            raise ValueError("Selected target_language is not supported by the active coach stack")
         normalized_voice_profile_id = voice_profile_id.strip() if isinstance(voice_profile_id, str) else None
         if normalized_voice_profile_id:
             if normalized_voice_profile_id.startswith("builtin:"):
@@ -197,7 +351,7 @@ class CoachService:
                 id=session_id,
                 user_id=user_id,
                 title=(title or "Coach Session").strip() or "Coach Session",
-                target_language=(target_language or "English").strip() or "English",
+                target_language=normalized_target_language,
                 native_language=native_language.strip() if isinstance(native_language, str) else native_language,
                 cefr_level=(cefr_level or "A2").strip() or "A2",
                 audio_retention_opt_in=bool(audio_retention_opt_in),
@@ -358,9 +512,11 @@ class CoachService:
             return False
         if normalized in {"(no transcript)", "no transcript", "[silence]", "[noise]"}:
             return False
+        if len(normalized) < 10:
+            return False
 
         words = re.findall(r"[a-zA-Z]+(?:'[a-zA-Z]+)?", normalized)
-        if len(words) < 2:
+        if len(words) < 3:
             return False
         filler_tokens = {
             "uh",
@@ -377,7 +533,7 @@ class CoachService:
             "silence",
         }
         meaningful_words = [word for word in words if word not in filler_tokens]
-        if len(meaningful_words) < 2:
+        if len(meaningful_words) < 3:
             return False
         return True
 
@@ -395,6 +551,46 @@ class CoachService:
             return code_match.group(1)
 
         return normalized[:2] if len(normalized) >= 2 else None
+
+    def _supported_language_codes(self) -> list[str]:
+        asr_codes = set(self.WHISPER_LANGUAGE_MAP.values())
+        tts_codes = set(self.TTS_LANGUAGE_VOICE_MAP.keys())
+        common = sorted(asr_codes.intersection(tts_codes))
+        return [code for code in common if code in self.CODE_TO_LANGUAGE_NAME]
+
+    def supported_languages(self) -> list[dict[str, Any]]:
+        enabled_lt, _, _ = self._languagetool_config()
+        codes = self._supported_language_codes()
+        payload: list[dict[str, Any]] = []
+        for code in codes:
+            payload.append(
+                {
+                    "code": code,
+                    "name": self.CODE_TO_LANGUAGE_NAME.get(code, code.upper()),
+                    "asr_supported": code in self.WHISPER_LANGUAGE_MAP.values(),
+                    "tts_supported": code in self.TTS_LANGUAGE_VOICE_MAP,
+                    "languagetool_supported": enabled_lt,
+                    "selectable": True,
+                    "is_default": code == "en",
+                }
+            )
+        return payload
+
+    def _resolve_supported_language_name(self, value: Optional[str]) -> Optional[str]:
+        raw = str(value or "").strip()
+        if not raw:
+            return None
+        normalized = raw.lower()
+        if normalized in self.CODE_TO_LANGUAGE_NAME:
+            normalized_name = self.CODE_TO_LANGUAGE_NAME[normalized]
+            for item in self.supported_languages():
+                if str(item.get("name") or "").lower() == normalized_name.lower():
+                    return normalized_name
+        for item in self.supported_languages():
+            name = str(item.get("name") or "").strip()
+            if name.lower() == normalized:
+                return name
+        return None
 
     def _resolve_voice_cipher(self) -> Fernet:
         configured = str(
@@ -841,20 +1037,10 @@ class CoachService:
         persona_style: Optional[str],
         voice_mode: str,
         reference_audio_bytes: Optional[bytes],
+        builtin_voice_id: Optional[str] = None,
+        runtime_device: Optional[str] = None,
     ) -> tuple[bytes, str]:
-        base_url = str(
-            os.environ.get("COACH_COSYVOICE_BASE_URL", settings.COACH_COSYVOICE_BASE_URL)
-            or settings.COACH_COSYVOICE_BASE_URL
-        ).strip()
-        model_id = str(
-            os.environ.get("COACH_COSYVOICE_MODEL_ID", settings.COACH_COSYVOICE_MODEL_ID)
-            or settings.COACH_COSYVOICE_MODEL_ID
-        ).strip()
-        timeout_raw = os.environ.get("COACH_COSYVOICE_TIMEOUT_SEC", settings.COACH_COSYVOICE_TIMEOUT_SEC)
-        try:
-            timeout_sec = max(5, int(timeout_raw))
-        except (TypeError, ValueError):
-            timeout_sec = int(settings.COACH_COSYVOICE_TIMEOUT_SEC)
+        base_url, model_id, timeout_sec = self._cosyvoice_runtime_config()
 
         payload: dict[str, Any] = {
             "text": text,
@@ -864,6 +1050,12 @@ class CoachService:
             "voice_mode": voice_mode,
             "model_id": model_id,
         }
+        normalized_runtime_device = str(runtime_device or "").strip().lower()
+        if normalized_runtime_device in {"cpu", "cuda"}:
+            payload["runtime_device"] = normalized_runtime_device
+        normalized_builtin_voice_id = str(builtin_voice_id or "").strip().lower()
+        if normalized_builtin_voice_id:
+            payload["builtin_voice_id"] = normalized_builtin_voice_id
         if reference_audio_bytes:
             payload["reference_audio_b64"] = base64.b64encode(reference_audio_bytes).decode("ascii")
 
@@ -880,6 +1072,407 @@ class CoachService:
             raise RuntimeError("CosyVoice returned empty audio")
         media_type = response.headers.get("content-type", "audio/wav")
         return audio_bytes, media_type
+
+    def _cosyvoice_runtime_config(self) -> tuple[str, str, int]:
+        base_url = str(
+            os.environ.get("COACH_COSYVOICE_BASE_URL", settings.COACH_COSYVOICE_BASE_URL)
+            or settings.COACH_COSYVOICE_BASE_URL
+        ).strip()
+        model_id = str(
+            os.environ.get("COACH_COSYVOICE_MODEL_ID", settings.COACH_COSYVOICE_MODEL_ID)
+            or settings.COACH_COSYVOICE_MODEL_ID
+        ).strip()
+        timeout_raw = os.environ.get("COACH_COSYVOICE_TIMEOUT_SEC", settings.COACH_COSYVOICE_TIMEOUT_SEC)
+        try:
+            timeout_sec = max(5, int(timeout_raw))
+        except (TypeError, ValueError):
+            timeout_sec = int(settings.COACH_COSYVOICE_TIMEOUT_SEC)
+        if not base_url:
+            base_url = settings.COACH_COSYVOICE_BASE_URL
+        if not model_id:
+            model_id = settings.COACH_COSYVOICE_MODEL_ID
+        return base_url, model_id, timeout_sec
+
+    def _coach_runtime_mode(self, mode: Optional[str]) -> str:
+        normalized = str(mode or "").strip().lower()
+        if normalized in {"voice", "text", "idle"}:
+            return normalized
+        return "voice"
+
+    def _languagetool_config(self) -> tuple[bool, str, int]:
+        enabled = str(
+            os.environ.get("COACH_LANGUAGETOOL_ENABLED", str(settings.COACH_LANGUAGETOOL_ENABLED))
+            or str(settings.COACH_LANGUAGETOOL_ENABLED)
+        ).strip().lower() in {"1", "true", "yes", "on"}
+        base_url = str(
+            os.environ.get("COACH_LANGUAGETOOL_BASE_URL", settings.COACH_LANGUAGETOOL_BASE_URL)
+            or settings.COACH_LANGUAGETOOL_BASE_URL
+        ).strip()
+        timeout_raw = os.environ.get("COACH_LANGUAGETOOL_TIMEOUT_SEC", settings.COACH_LANGUAGETOOL_TIMEOUT_SEC)
+        try:
+            timeout_sec = max(2, int(timeout_raw))
+        except (TypeError, ValueError):
+            timeout_sec = int(settings.COACH_LANGUAGETOOL_TIMEOUT_SEC)
+        return enabled, base_url, timeout_sec
+
+    async def _languagetool_check(
+        self,
+        *,
+        text: str,
+        language: Optional[str],
+    ) -> list[dict[str, Any]]:
+        enabled, base_url, timeout_sec = self._languagetool_config()
+        normalized = re.sub(r"\s+", " ", str(text or "")).strip()
+        if not enabled or not base_url or not normalized:
+            return []
+
+        language_code = (self._target_language_code(language) or "en").lower()
+        lt_defaults = {
+            "en": "en-US",
+            "fr": "fr",
+            "es": "es",
+            "de": "de",
+            "it": "it",
+            "pt": "pt",
+            "ru": "ru",
+            "ar": "ar",
+            "ja": "ja",
+            "ko": "ko",
+            "zh": "zh-CN",
+            "tr": "tr",
+            "nl": "nl",
+            "pl": "pl",
+            "uk": "uk",
+            "sv": "sv",
+            "el": "el",
+            "hi": "hi",
+            "ur": "ur",
+        }
+        lt_language = lt_defaults.get(language_code, language_code)
+        timeout = httpx.Timeout(connect=2.0, read=float(timeout_sec), write=5.0, pool=5.0)
+
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                response = await client.post(
+                    f"{base_url.rstrip('/')}/v2/check",
+                    data={"language": lt_language, "text": normalized},
+                )
+        except Exception as exc:
+            logger.debug("LanguageTool unavailable: %s", exc)
+            return []
+        if response.status_code >= 400:
+            logger.debug("LanguageTool returned status %s", response.status_code)
+            return []
+
+        payload: dict[str, Any] = {}
+        try:
+            parsed = response.json()
+            if isinstance(parsed, Mapping):
+                payload = dict(parsed)
+        except Exception:
+            return []
+
+        matches = payload.get("matches")
+        if not isinstance(matches, list):
+            return []
+
+        findings: list[dict[str, Any]] = []
+        for match in matches[:5]:
+            if not isinstance(match, Mapping):
+                continue
+            rule = match.get("rule") if isinstance(match.get("rule"), Mapping) else {}
+            detail = str(match.get("message") or "").strip()
+            if not detail:
+                continue
+            suggestion = ""
+            replacements = match.get("replacements")
+            if isinstance(replacements, list) and replacements:
+                first = replacements[0]
+                if isinstance(first, Mapping):
+                    suggestion = str(first.get("value") or "").strip()
+            findings.append(
+                {
+                    "category": "grammar",
+                    "detail": detail,
+                    "severity": "low",
+                    "suggestion": suggestion or None,
+                    "metadata": {
+                        "source": "languagetool",
+                        "rule_id": str(rule.get("id") or ""),
+                        "issue_type": str(rule.get("issueType") or ""),
+                    },
+                }
+            )
+        return findings
+
+    async def _languagetool_status(self) -> dict[str, Any]:
+        enabled, base_url, timeout_sec = self._languagetool_config()
+        if not enabled:
+            return {
+                "engine": "languagetool",
+                "enabled": False,
+                "ready": False,
+                "state": "disabled",
+                "detail": "LanguageTool is disabled.",
+            }
+
+        timeout = httpx.Timeout(connect=2.0, read=float(timeout_sec), write=5.0, pool=5.0)
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                response = await client.get(f"{base_url.rstrip('/')}/v2/languages")
+            if response.status_code >= 400:
+                raise RuntimeError(f"status={response.status_code}")
+            return {
+                "engine": "languagetool",
+                "enabled": True,
+                "ready": True,
+                "state": "ready",
+                "detail": "LanguageTool ready.",
+            }
+        except Exception as exc:
+            return {
+                "engine": "languagetool",
+                "enabled": True,
+                "ready": False,
+                "state": "error",
+                "detail": f"LanguageTool unavailable: {exc}",
+            }
+
+    async def _ollama_status(
+        self,
+        *,
+        warm: bool,
+        mode: str,
+    ) -> dict[str, Any]:
+        profile = self._coach_hardware_profile()
+        selected_model = str(profile.get("llm_primary_model") or settings.HEAVY_MODEL)
+        if mode == "idle":
+            selected_model = settings.SMART_MODEL
+        timeout = httpx.Timeout(connect=3.0, read=15.0, write=10.0, pool=10.0)
+        status: dict[str, Any] = {
+            "engine": "ollama",
+            "ready": False,
+            "state": "error",
+            "detail": "Ollama unavailable.",
+            "selected_model": selected_model,
+            "available_models": [],
+            "runtime_profile": profile.get("name"),
+        }
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                tags_response = await client.get(f"{self.base_url}/api/tags")
+                tags_response.raise_for_status()
+                tags_payload = tags_response.json() if tags_response.content else {}
+                model_rows = tags_payload.get("models") if isinstance(tags_payload, Mapping) else []
+                models = [
+                    str(item.get("name") or "").strip()
+                    for item in (model_rows or [])
+                    if isinstance(item, Mapping) and str(item.get("name") or "").strip()
+                ]
+                status["available_models"] = models
+                status["ready"] = bool(models)
+                status["state"] = "ready" if models else "idle"
+                status["detail"] = "Ollama ready." if models else "No Ollama models installed."
+
+                if warm and selected_model:
+                    keep_alive = str(
+                        os.environ.get("COACH_OLLAMA_KEEPALIVE", settings.COACH_OLLAMA_KEEPALIVE)
+                        or settings.COACH_OLLAMA_KEEPALIVE
+                    ).strip() or "15m"
+                    warm_payload = {
+                        "model": selected_model,
+                        "prompt": "hello",
+                        "stream": False,
+                        "keep_alive": keep_alive,
+                        "options": {
+                            "num_predict": 1,
+                            "temperature": 0.1,
+                        },
+                    }
+                    warm_response = await client.post(f"{self.base_url}/api/generate", json=warm_payload)
+                    if warm_response.status_code >= 400:
+                        status["state"] = "warming"
+                        status["detail"] = f"Ollama warmup pending for {selected_model}."
+                    else:
+                        status["state"] = "ready"
+                        status["detail"] = f"Ollama model warmed: {selected_model}"
+        except Exception as exc:
+            status["detail"] = f"Ollama unavailable: {exc}"
+        return status
+
+    async def _asr_status(self, *, warm: bool) -> dict[str, Any]:
+        profile = self._coach_hardware_profile()
+        fast_model_name = self._fast_whisper_model_ref()
+        accurate_model_name = self._accurate_whisper_model_ref()
+        if warm:
+            await self._get_whisper_model()
+            if bool(profile.get("asr_preload_accurate")):
+                await self._get_whisper_accurate_model()
+        accurate_ready = self._whisper_accurate_model is not None
+        if warm and accurate_model_name == fast_model_name:
+            accurate_ready = self._whisper_model is not None
+        ready = self._whisper_model is not None
+        return {
+            "engine": "faster-whisper",
+            "ready": ready,
+            "state": "ready" if ready else ("warming" if warm else "idle"),
+            "detail": "ASR model ready." if ready else "ASR model not loaded yet.",
+            "model_id": fast_model_name,
+            "runtime_device": self._whisper_runtime_device or "",
+            "planned_runtime_device": str(profile.get("asr_device") or ""),
+            "runtime_profile": str(profile.get("name") or ""),
+            "fast_model_id": fast_model_name,
+            "accurate_model_id": accurate_model_name,
+            "fast_model_ready": ready,
+            "accurate_model_ready": accurate_ready,
+        }
+
+    async def get_runtime_status(
+        self,
+        *,
+        warm: bool = False,
+        mode: Optional[str] = None,
+    ) -> dict[str, Any]:
+        profile = self._coach_hardware_profile()
+        runtime_mode = self._coach_runtime_mode(mode)
+        want_voice = runtime_mode == "voice"
+        tts_task = asyncio.create_task(self.get_tts_status(warm=(warm and want_voice)))
+        asr_task = asyncio.create_task(self._asr_status(warm=(warm and want_voice)))
+        llm_task = asyncio.create_task(self._ollama_status(warm=warm, mode=runtime_mode))
+        lt_task = asyncio.create_task(self._languagetool_status())
+        tts_status, asr_status, llm_status, lt_status = await asyncio.gather(
+            tts_task,
+            asr_task,
+            llm_task,
+            lt_task,
+        )
+        components = {
+            "tts": tts_status,
+            "asr": asr_status,
+            "llm": llm_status,
+            "languagetool": lt_status,
+        }
+        critical = ("llm",)
+        if want_voice:
+            critical = ("llm", "asr", "tts")
+        ready = all(bool(components[name].get("ready")) for name in critical)
+        state = "ready" if ready else "warming"
+        return {
+            "ok": True,
+            "mode": runtime_mode,
+            "ready": ready,
+            "state": state,
+            "runtime_profile": {
+                "name": str(profile.get("name") or ""),
+                "gpu_enabled": bool(profile.get("use_gpu")),
+                "gpu_vram_gb": profile.get("gpu_vram_gb"),
+                "high_vram_threshold_gb": profile.get("high_vram_threshold_gb"),
+                "llm_primary_model": str(profile.get("llm_primary_model") or ""),
+                "asr_device": str(profile.get("asr_device") or ""),
+                "asr_fast_model": str(profile.get("asr_fast_model") or ""),
+                "asr_accurate_model": str(profile.get("asr_accurate_model") or ""),
+                "tts_device": str(profile.get("tts_device") or ""),
+            },
+            "components": components,
+        }
+
+    async def preload_runtime(self, *, mode: Optional[str] = None) -> dict[str, Any]:
+        runtime_mode = self._coach_runtime_mode(mode)
+        if runtime_mode == "idle":
+            return await self.get_runtime_status(warm=False, mode=runtime_mode)
+        return await self.get_runtime_status(warm=True, mode=runtime_mode)
+
+    async def get_tts_status(self, *, warm: bool = False) -> dict[str, Any]:
+        profile = self._coach_hardware_profile()
+        desired_device = self._resolve_runtime_device(
+            env_key="COACH_COSYVOICE_DEVICE",
+            configured_default=settings.COACH_COSYVOICE_DEVICE,
+            profile_default=str(profile.get("tts_device") or "cpu"),
+        )
+        provider = str(
+            os.environ.get("COACH_TTS_PROVIDER", settings.COACH_TTS_PROVIDER)
+            or settings.COACH_TTS_PROVIDER
+        ).strip().lower() or "espeak"
+        if provider != "cosyvoice":
+            return {
+                "ok": True,
+                "engine": "espeak",
+                "provider": provider,
+                "ready": True,
+                "state": "ready",
+                "detail": "Local espeak voice is ready.",
+                "model_id": "",
+                "loaded_model_id": "",
+                "warmup_active": False,
+                "updated_at": None,
+                "runtime_device": desired_device,
+            }
+
+        base_url, model_id, timeout_sec = self._cosyvoice_runtime_config()
+        timeout = httpx.Timeout(connect=5.0, read=min(float(timeout_sec), 15.0), write=10.0, pool=10.0)
+        params = {"runtime_device": desired_device}
+        if warm:
+            params["warm"] = "true"
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                response = await client.get(f"{base_url.rstrip('/')}/status", params=params)
+        except Exception as exc:
+            return {
+                "ok": False,
+                "engine": "cosyvoice",
+                "provider": provider,
+                "ready": False,
+                "state": "error",
+                "detail": f"Voice service unreachable: {exc}",
+                "model_id": model_id,
+                "loaded_model_id": "",
+                "warmup_active": False,
+                "updated_at": None,
+                "runtime_device": desired_device,
+            }
+
+        if response.status_code >= 400:
+            detail = response.text.strip() or f"Voice status failed ({response.status_code})"
+            return {
+                "ok": False,
+                "engine": "cosyvoice",
+                "provider": provider,
+                "ready": False,
+                "state": "error",
+                "detail": detail,
+                "model_id": model_id,
+                "loaded_model_id": "",
+                "warmup_active": False,
+                "updated_at": None,
+                "runtime_device": desired_device,
+            }
+
+        payload: dict[str, Any] = {}
+        try:
+            parsed = response.json()
+            if isinstance(parsed, Mapping):
+                payload = dict(parsed)
+        except Exception:
+            payload = {}
+
+        ready = bool(payload.get("ready"))
+        state = str(payload.get("state") or ("ready" if ready else "loading")).strip().lower()
+        detail = str(payload.get("detail") or "").strip()
+        if not detail:
+            detail = "Voice model ready." if ready else "Voice model is preparing."
+        return {
+            "ok": bool(payload.get("ok", True)),
+            "engine": str(payload.get("engine") or "cosyvoice"),
+            "provider": provider,
+            "ready": ready,
+            "state": state,
+            "detail": detail,
+            "model_id": str(payload.get("model_id") or model_id),
+            "loaded_model_id": str(payload.get("loaded_model_id") or ""),
+            "warmup_active": bool(payload.get("warmup_active")),
+            "updated_at": payload.get("updated_at"),
+            "runtime_device": str(payload.get("runtime_device") or desired_device),
+        }
 
     async def synthesize_reply_audio(
         self,
@@ -899,6 +1492,12 @@ class CoachService:
         if not normalized:
             raise ValueError("Text is empty")
 
+        profile = self._coach_hardware_profile()
+        desired_tts_device = self._resolve_runtime_device(
+            env_key="COACH_COSYVOICE_DEVICE",
+            configured_default=settings.COACH_COSYVOICE_DEVICE,
+            profile_default=str(profile.get("tts_device") or "cpu"),
+        )
         clipped = normalized[:2000]
         resolved_provider = str(
             tts_provider
@@ -923,13 +1522,15 @@ class CoachService:
                 # Built-in library voices are driven through clone reference samples.
                 cosyvoice_mode = "cloned_session"
             requires_clone_voice = bool(normalized_builtin_voice_id) or cosyvoice_mode in {"cloned_profile", "cloned_session"}
-            reference_audio_bytes = await self._load_reference_audio_bytes(
-                user_id=user_id,
-                voice_mode=cosyvoice_mode,
-                voice_profile_id=voice_profile_id,
-                reference_clip_id=reference_clip_id,
-                builtin_voice_id=normalized_builtin_voice_id,
-            )
+            reference_audio_bytes: Optional[bytes] = None
+            if not normalized_builtin_voice_id:
+                reference_audio_bytes = await self._load_reference_audio_bytes(
+                    user_id=user_id,
+                    voice_mode=cosyvoice_mode,
+                    voice_profile_id=voice_profile_id,
+                    reference_clip_id=reference_clip_id,
+                    builtin_voice_id=normalized_builtin_voice_id,
+                )
             try:
                 return await self._synthesize_with_cosyvoice(
                     text=clipped,
@@ -938,6 +1539,8 @@ class CoachService:
                     persona_style=persona_style,
                     voice_mode=cosyvoice_mode,
                     reference_audio_bytes=reference_audio_bytes,
+                    builtin_voice_id=normalized_builtin_voice_id or None,
+                    runtime_device=desired_tts_device,
                 )
             except Exception:
                 if requires_clone_voice:
@@ -978,7 +1581,7 @@ class CoachService:
                 .options(selectinload(CoachTurn.mistakes))
                 .order_by(CoachTurn.turn_index.asc(), CoachTurn.created_at.asc())
             )
-            return result.scalars().all()
+            return result.scalars().all() # type: ignore
 
     async def list_mistakes(self, session_id: str, user_id: int) -> List[CoachMistake]:
         session_id = str(session_id)
@@ -991,7 +1594,7 @@ class CoachService:
                 )
                 .order_by(CoachMistake.created_at.asc(), CoachMistake.id.asc())
             )
-            return result.scalars().all()
+            return result.scalars().all() # type: ignore
 
     async def progress(self, user_id: int, session_id: str) -> dict:
         turns = await self.list_turns(session_id=session_id, user_id=user_id)
@@ -1214,6 +1817,71 @@ class CoachService:
         except Exception:
             return []
 
+    def _whisper_runtime_options(self) -> tuple[str, str, bool, str]:
+        profile = self._coach_hardware_profile()
+        runtime_device = self._resolve_runtime_device(
+            env_key="COACH_WHISPER_DEVICE",
+            configured_default=settings.COACH_WHISPER_DEVICE,
+            profile_default=str(profile.get("asr_device") or "cpu"),
+        )
+
+        compute_type = self._env_text("COACH_WHISPER_COMPUTE_TYPE", settings.COACH_WHISPER_COMPUTE_TYPE)
+        if not compute_type:
+            compute_type = str(profile.get("asr_compute_type") or ("float16" if runtime_device == "cuda" else "int8"))
+
+        local_files_only = self._env_bool("COACH_WHISPER_LOCAL_FILES_ONLY", bool(settings.COACH_WHISPER_LOCAL_FILES_ONLY))
+        download_root = self._env_text("COACH_WHISPER_DOWNLOAD_ROOT", settings.COACH_WHISPER_DOWNLOAD_ROOT)
+        return runtime_device, compute_type, local_files_only, download_root
+
+    async def _load_whisper_model(self, *, model_ref: str):
+        from faster_whisper import WhisperModel
+
+        runtime_device, compute_type, local_files_only, download_root = self._whisper_runtime_options()
+        whisper_kwargs: Dict[str, Any] = {
+            "device": runtime_device,
+            "compute_type": compute_type,
+            "local_files_only": local_files_only,
+        }
+        if download_root:
+            whisper_kwargs["download_root"] = download_root
+
+        try:
+            model = WhisperModel(model_ref, **whisper_kwargs)
+        except TypeError:
+            # Compatibility fallback for older faster-whisper versions.
+            whisper_kwargs.pop("local_files_only", None)
+            model = WhisperModel(model_ref, **whisper_kwargs)
+
+        logger.info(
+            "Loaded faster-whisper model for coach transcription: model_ref=%s device=%s compute_type=%s local_files_only=%s download_root=%s",
+            model_ref,
+            runtime_device,
+            compute_type,
+            local_files_only,
+            download_root or "<default>",
+        )
+        return model, runtime_device
+
+    def _fast_whisper_model_ref(self) -> str:
+        profile = self._coach_hardware_profile()
+        fast_name = self._env_text("COACH_WHISPER_FAST_MODEL", settings.COACH_WHISPER_FAST_MODEL)
+        legacy_name = self._env_text("COACH_WHISPER_MODEL", settings.COACH_WHISPER_MODEL)
+        model_path = self._env_text("COACH_WHISPER_MODEL_PATH", settings.COACH_WHISPER_MODEL_PATH)
+        if model_path:
+            return model_path
+        if fast_name and fast_name.lower() != "auto":
+            return fast_name
+        if legacy_name and legacy_name.lower() != "auto":
+            return legacy_name
+        return str(profile.get("asr_fast_model") or "medium")
+
+    def _accurate_whisper_model_ref(self) -> str:
+        profile = self._coach_hardware_profile()
+        accurate_name = self._env_text("COACH_WHISPER_ACCURATE_MODEL", settings.COACH_WHISPER_ACCURATE_MODEL)
+        if accurate_name and accurate_name.lower() != "auto":
+            return accurate_name
+        return str(profile.get("asr_accurate_model") or self._fast_whisper_model_ref())
+
     async def _get_whisper_model(self):
         if self._whisper_model is not None:
             return self._whisper_model
@@ -1221,86 +1889,153 @@ class CoachService:
             if self._whisper_model is not None:
                 return self._whisper_model
             try:
-                from faster_whisper import WhisperModel
-
-                configured_device = os.environ.get(
-                    "COACH_WHISPER_DEVICE",
-                    settings.COACH_WHISPER_DEVICE,
-                ).strip().lower()
-                if configured_device not in {"auto", "cpu", "cuda"}:
-                    configured_device = "auto"
-                runtime_device = "cuda" if configured_device == "cuda" or (
-                    configured_device == "auto" and settings.USE_GPU
-                ) else "cpu"
-
-                compute_type = os.environ.get(
-                    "COACH_WHISPER_COMPUTE_TYPE",
-                    settings.COACH_WHISPER_COMPUTE_TYPE,
-                ).strip()
-                if not compute_type:
-                    compute_type = "float16" if runtime_device == "cuda" else "int8"
-                model_name = os.environ.get("COACH_WHISPER_MODEL", settings.COACH_WHISPER_MODEL).strip()
-                model_path = os.environ.get("COACH_WHISPER_MODEL_PATH", settings.COACH_WHISPER_MODEL_PATH).strip()
-                model_ref = model_path or model_name or "small"
-
-                local_only_raw = os.environ.get(
-                    "COACH_WHISPER_LOCAL_FILES_ONLY",
-                    str(settings.COACH_WHISPER_LOCAL_FILES_ONLY),
-                ).strip().lower()
-                local_files_only = local_only_raw in {"1", "true", "yes", "on"}
-
-                download_root = os.environ.get(
-                    "COACH_WHISPER_DOWNLOAD_ROOT",
-                    settings.COACH_WHISPER_DOWNLOAD_ROOT,
-                ).strip()
-
-                whisper_kwargs: Dict[str, Any] = {
-                    "device": runtime_device,
-                    "compute_type": compute_type,
-                    "local_files_only": local_files_only,
-                }
-                if download_root:
-                    whisper_kwargs["download_root"] = download_root
-
-                try:
-                    self._whisper_model = WhisperModel(model_ref, **whisper_kwargs)
-                except TypeError:
-                    # Compatibility fallback for older faster-whisper versions.
-                    whisper_kwargs.pop("local_files_only", None)
-                    self._whisper_model = WhisperModel(model_ref, **whisper_kwargs)
-
+                model, runtime_device = await self._load_whisper_model(model_ref=self._fast_whisper_model_ref())
+                self._whisper_model = model
                 self._whisper_runtime_device = runtime_device
-                logger.info(
-                    "Loaded faster-whisper model for coach transcription: model_ref=%s device=%s compute_type=%s local_files_only=%s download_root=%s",
-                    model_ref,
-                    runtime_device,
-                    compute_type,
-                    local_files_only,
-                    download_root or "<default>",
-                )
             except Exception as exc:
                 logger.warning("Could not load faster-whisper model: %s", exc)
                 self._whisper_model = None
                 self._whisper_runtime_device = None
             return self._whisper_model
 
-    async def _transcribe_audio(
+    async def _get_whisper_accurate_model(self):
+        if self._whisper_accurate_model is not None:
+            return self._whisper_accurate_model
+        async with self._whisper_lock:
+            if self._whisper_accurate_model is not None:
+                return self._whisper_accurate_model
+            try:
+                model_ref = self._accurate_whisper_model_ref()
+                if model_ref == self._fast_whisper_model_ref() and self._whisper_model is not None:
+                    self._whisper_accurate_model = self._whisper_model
+                    self._whisper_accurate_runtime_device = self._whisper_runtime_device
+                else:
+                    model, runtime_device = await self._load_whisper_model(model_ref=model_ref)
+                    self._whisper_accurate_model = model
+                    self._whisper_accurate_runtime_device = runtime_device
+            except Exception as exc:
+                logger.warning("Could not load accurate faster-whisper model: %s", exc)
+                self._whisper_accurate_model = None
+                self._whisper_accurate_runtime_device = None
+            return self._whisper_accurate_model
+
+    def _asr_confidence_band(
+        self,
+        *,
+        avg_logprob: Optional[float],
+        no_speech_prob: Optional[float],
+        text: str,
+    ) -> tuple[float, str]:
+        score = 0.75
+        if avg_logprob is not None:
+            if avg_logprob < -1.3:
+                score -= 0.45
+            elif avg_logprob < -0.9:
+                score -= 0.25
+            elif avg_logprob < -0.6:
+                score -= 0.1
+        if no_speech_prob is not None:
+            if no_speech_prob > 0.8:
+                score -= 0.5
+            elif no_speech_prob > 0.6:
+                score -= 0.25
+        if not self._is_transcript_evaluable(text):
+            score -= 0.3
+        score = max(0.0, min(1.0, score))
+        if score >= 0.7:
+            return score, "high"
+        if score >= 0.45:
+            return score, "medium"
+        return score, "low"
+
+    def _extract_segments_stats(self, segments: Sequence[Any], text: str) -> dict[str, Any]:
+        avg_logprobs: list[float] = []
+        no_speech_probs: list[float] = []
+        for segment in segments:
+            avg_logprob = getattr(segment, "avg_logprob", None)
+            if isinstance(avg_logprob, (float, int)):
+                avg_logprobs.append(float(avg_logprob))
+            no_speech_prob = getattr(segment, "no_speech_prob", None)
+            if isinstance(no_speech_prob, (float, int)):
+                no_speech_probs.append(float(no_speech_prob))
+        avg_logprob_value = (sum(avg_logprobs) / len(avg_logprobs)) if avg_logprobs else None
+        no_speech_value = max(no_speech_probs) if no_speech_probs else None
+        confidence_value, confidence_band = self._asr_confidence_band(
+            avg_logprob=avg_logprob_value,
+            no_speech_prob=no_speech_value,
+            text=text,
+        )
+        return {
+            "avg_logprob": avg_logprob_value,
+            "no_speech_prob": no_speech_value,
+            "confidence": confidence_value,
+            "confidence_band": confidence_band,
+        }
+
+    async def _transcribe_with_model(
+        self,
+        *,
+        whisper_model: Any,
+        path: str,
+        language: Optional[str],
+    ) -> tuple[str, dict[str, Any]]:
+        segments, _ = whisper_model.transcribe(path, language=language or None)
+        normalized_segments = [segment for segment in segments]
+        text = " ".join(
+            segment.text.strip() for segment in normalized_segments if getattr(segment, "text", "").strip()
+        )
+        text = re.sub(r"\s+", " ", text).strip()
+        stats = self._extract_segments_stats(normalized_segments, text=text)
+        return text, stats
+
+    async def _transcribe_audio_adaptive(
         self,
         audio_bytes: bytes,
         *,
         filename: Optional[str] = None,
         transcript_hint: Optional[str] = None,
         language: Optional[str] = None,
-    ) -> str:
+    ) -> dict[str, Any]:
         if transcript_hint and transcript_hint.strip():
-            return re.sub(r"\s+", " ", transcript_hint).strip()
+            hinted = re.sub(r"\s+", " ", transcript_hint).strip()
+            return {
+                "text": hinted,
+                "model": "hint",
+                "retry_used": False,
+                "confidence": 1.0,
+                "confidence_band": "high",
+                "avg_logprob": None,
+                "no_speech_prob": None,
+            }
 
         whisper_model = await self._get_whisper_model()
         suffix = ".webm"
         if filename and "." in filename:
             suffix = f".{filename.rsplit('.', 1)[-1]}"
         if whisper_model is None:
-            return f"captured {len(audio_bytes)} bytes of audio"
+            return {
+                "text": f"captured {len(audio_bytes)} bytes of audio",
+                "model": "none",
+                "retry_used": False,
+                "confidence": 0.0,
+                "confidence_band": "low",
+                "avg_logprob": None,
+                "no_speech_prob": None,
+            }
+
+        profile = self._coach_hardware_profile()
+        retry_default = bool(profile.get("asr_retry_enabled", True))
+        retry_raw = self._env_text("COACH_WHISPER_ENABLE_ACCURATE_RETRY", str(settings.COACH_WHISPER_ENABLE_ACCURATE_RETRY))
+        if retry_raw.lower() == "auto":
+            retry_enabled = retry_default
+        else:
+            retry_enabled = retry_raw.lower() in {"1", "true", "yes", "on"}
+        threshold_default = float(profile.get("asr_retry_threshold", settings.COACH_WHISPER_RETRY_CONFIDENCE_THRESHOLD))
+        threshold_raw = self._env_text("COACH_WHISPER_RETRY_CONFIDENCE_THRESHOLD", str(settings.COACH_WHISPER_RETRY_CONFIDENCE_THRESHOLD))
+        try:
+            retry_threshold = max(0.0, min(1.0, float(threshold_raw)))
+        except (TypeError, ValueError):
+            retry_threshold = threshold_default
 
         temp_path = ""
         try:
@@ -1308,34 +2043,57 @@ class CoachService:
                 temp_file.write(audio_bytes)
                 temp_path = temp_file.name
 
-            segments, _ = whisper_model.transcribe(temp_path, language=language or None)
-            text = " ".join(segment.text.strip() for segment in segments if segment.text and segment.text.strip())
-            text = re.sub(r"\s+", " ", text).strip()
-            if text:
-                return text
+            text, stats = await self._transcribe_with_model(
+                whisper_model=whisper_model,
+                path=temp_path,
+                language=language,
+            )
+            result = {
+                "text": text or f"captured {len(audio_bytes)} bytes of audio",
+                "model": self._fast_whisper_model_ref(),
+                "retry_used": False,
+                **stats,
+            }
+
+            if retry_enabled and result["confidence"] < retry_threshold:
+                accurate_model = await self._get_whisper_accurate_model()
+                if accurate_model is not None:
+                    retry_text, retry_stats = await self._transcribe_with_model(
+                        whisper_model=accurate_model,
+                        path=temp_path,
+                        language=language,
+                    )
+                    retry_result = {
+                        "text": retry_text or result["text"],
+                        "model": self._accurate_whisper_model_ref(),
+                        "retry_used": True,
+                        **retry_stats,
+                    }
+                    if retry_result["confidence"] >= result["confidence"]:
+                        result = retry_result
+            return result
         except Exception as exc:
             error_text = str(exc).lower()
-            cuda_runtime_error = any(
-                marker in error_text for marker in ("libcublas", "cuda", "cudnn", "cublas")
-            )
+            cuda_runtime_error = any(marker in error_text for marker in ("libcublas", "cuda", "cudnn", "cublas"))
             if cuda_runtime_error and self._whisper_runtime_device == "cuda":
-                logger.warning(
-                    "Coach transcription CUDA runtime issue detected (%s). Retrying on CPU.",
-                    exc,
-                )
+                logger.warning("Coach transcription CUDA runtime issue detected (%s). Retrying on CPU.", exc)
                 self._whisper_model = None
                 self._whisper_runtime_device = None
                 os.environ["COACH_WHISPER_DEVICE"] = "cpu"
                 cpu_model = await self._get_whisper_model()
-                if cpu_model is not None:
+                if cpu_model is not None and temp_path:
                     try:
-                        segments, _ = cpu_model.transcribe(temp_path, language=language or None)
-                        text = " ".join(
-                            segment.text.strip() for segment in segments if segment.text and segment.text.strip()
+                        text, stats = await self._transcribe_with_model(
+                            whisper_model=cpu_model,
+                            path=temp_path,
+                            language=language,
                         )
-                        text = re.sub(r"\s+", " ", text).strip()
-                        if text:
-                            return text
+                        return {
+                            "text": text or f"captured {len(audio_bytes)} bytes of audio",
+                            "model": self._fast_whisper_model_ref(),
+                            "retry_used": False,
+                            **stats,
+                        }
                     except Exception as retry_exc:
                         logger.warning("Coach transcription CPU retry failed: %s", retry_exc)
             logger.warning("Coach transcription failed, using fallback transcript: %s", exc)
@@ -1346,7 +2104,31 @@ class CoachService:
                 except OSError:
                     pass
 
-        return f"captured {len(audio_bytes)} bytes of audio"
+        return {
+            "text": f"captured {len(audio_bytes)} bytes of audio",
+            "model": "fallback-bytes",
+            "retry_used": False,
+            "confidence": 0.0,
+            "confidence_band": "low",
+            "avg_logprob": None,
+            "no_speech_prob": None,
+        }
+
+    async def _transcribe_audio(
+        self,
+        audio_bytes: bytes,
+        *,
+        filename: Optional[str] = None,
+        transcript_hint: Optional[str] = None,
+        language: Optional[str] = None,
+    ) -> str:
+        payload = await self._transcribe_audio_adaptive(
+            audio_bytes=audio_bytes,
+            filename=filename,
+            transcript_hint=transcript_hint,
+            language=language,
+        )
+        return str(payload.get("text") or "").strip() or f"captured {len(audio_bytes)} bytes of audio"
 
     def _fallback_coaching(
         self,
@@ -1375,7 +2157,12 @@ class CoachService:
                     "suggestion": "Keep speaking with varied sentence structure.",
                 }
             )
-        score = 80 if word_count >= 5 else 68
+        if word_count >= 14:
+            score = 78
+        elif word_count >= 8:
+            score = 70
+        else:
+            score = 55
         correction = mistakes[0]["suggestion"] if mistakes and mistakes[0]["category"] != "general" else None
         explanation = (
             "Target: keep your answer precise.\nNative: keep expanding with concrete examples."
@@ -1414,6 +2201,89 @@ class CoachService:
         except json.JSONDecodeError:
             return None
 
+    async def _coach_fast_with_model(
+        self,
+        *,
+        model: str,
+        transcript: str,
+        target_language: str,
+        focus_area: Optional[str] = None,
+        persona_style: Optional[str] = None,
+        asr_confidence_band: str = "high",
+    ) -> tuple[dict[str, Any], int]:
+        subject = str(focus_area or "").strip() or "General conversation"
+        persona = str(persona_style or "").strip() or "Default coach"
+        confidence_band = str(asr_confidence_band or "high").strip().lower()
+        system_prompt = (
+            "You are a language coach in live voice mode. Return JSON only.\n"
+            "Output fields:\n"
+            "1) reply: one short response sentence.\n"
+            "2) follow_up_question: one short question that keeps the learner speaking.\n"
+            "3) quick_recast: optional short correction/recast.\n"
+            "4) needs_confirmation: boolean.\n"
+            "5) confirmation_text: optional question when transcription confidence is low.\n"
+            "Rules:\n"
+            "- If there is an obvious grammar mistake and confidence is not low, include a quick recast then continue the conversation.\n"
+            "- If confidence is low, avoid strict correction and ask confirmation first.\n"
+            "- Keep messages concise and natural."
+        )
+        user_prompt = (
+            f"Target language: {target_language}\n"
+            f"Subject: {subject}\n"
+            f"Persona instructions: {persona}\n"
+            f"ASR confidence band: {confidence_band}\n"
+            f"Learner transcript: {transcript}\n"
+            "Return strictly valid JSON."
+        )
+        payload = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            "stream": False,
+            "format": "json",
+            "options": {
+                "temperature": 0.2,
+                "num_ctx": settings.OLLAMA_NUM_CTX,
+                "num_predict": 90,
+            },
+        }
+        timeout = httpx.Timeout(
+            connect=self.OLLAMA_CONNECT_TIMEOUT_SEC,
+            read=max(10.0, float(settings.OLLAMA_CHAT_TIMEOUT_SEC)),
+            write=self.OLLAMA_WRITE_TIMEOUT_SEC,
+            pool=self.OLLAMA_POOL_TIMEOUT_SEC,
+        )
+        started = time.perf_counter()
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.post(f"{self.base_url}/api/chat", json=payload)
+        response.raise_for_status()
+        elapsed_ms = int((time.perf_counter() - started) * 1000)
+        data = response.json()
+        content = (
+            data.get("message", {}).get("content")
+            if isinstance(data.get("message"), dict)
+            else data.get("response")
+        )
+        parsed = self._extract_json_object(str(content or ""))
+        if not parsed:
+            raise ValueError("Coach fast response was not valid JSON")
+        reply = str(parsed.get("reply") or "").strip()
+        follow_up_question = str(parsed.get("follow_up_question") or "").strip()
+        quick_recast = str(parsed.get("quick_recast") or "").strip()
+        needs_confirmation = bool(parsed.get("needs_confirmation"))
+        confirmation_text = str(parsed.get("confirmation_text") or "").strip()
+        if not reply:
+            reply = "Good start. Keep going."
+        return {
+            "reply": reply,
+            "follow_up_question": follow_up_question,
+            "quick_recast": quick_recast,
+            "needs_confirmation": needs_confirmation,
+            "confirmation_text": confirmation_text,
+        }, elapsed_ms
+
     async def _coach_with_model(
         self,
         *,
@@ -1449,6 +2319,7 @@ class CoachService:
             "6) explanation must be bilingual: target language first, native language second.\n"
             "7) mistakes must include category, detail, severity, suggestion.\n"
             "8) Keep a consistent speaking style based on Persona instructions when provided.\n"
+            "9) When learner grammar is clearly wrong, begin reply with a brief natural recast correction, then continue.\n"
         )
         user_prompt = (
             f"Target language: {target_language}\n"
@@ -1499,7 +2370,7 @@ class CoachService:
         reply = str(parsed.get("reply") or "").strip()
         score_raw = parsed.get("score")
         try:
-            score = int(score_raw)
+            score = int(score_raw) # type: ignore
         except (TypeError, ValueError):
             score = 0
         score = max(0, min(100, score))
@@ -1538,12 +2409,14 @@ class CoachService:
             raise ValueError("Audio file is too large")
         await audio.seek(0)
 
-        transcript = await self._transcribe_audio(
+        transcription_payload = await self._transcribe_audio_adaptive(
             audio_bytes=audio_bytes,
             filename=getattr(audio, "filename", None),
             transcript_hint=transcript_hint,
             language=self._target_language_code(session.target_language),
         )
+        transcript = str(transcription_payload.get("text") or "").strip()
+        asr_confidence_band = str(transcription_payload.get("confidence_band") or "low").strip().lower()
         turn_id = str(uuid.uuid4())
 
         partial_words: List[str] = []
@@ -1559,11 +2432,15 @@ class CoachService:
             "type": "stt_final",
             "turn_id": turn_id,
             "text": transcript,
+            "asr_model": str(transcription_payload.get("model") or ""),
+            "asr_retry_used": bool(transcription_payload.get("retry_used")),
+            "asr_confidence_band": asr_confidence_band,
+            "asr_confidence": transcription_payload.get("confidence"),
         }
 
         if not self._is_transcript_evaluable(transcript):
             retry_reply = (
-                "I couldn't catch a clear spoken answer. Please hold the button and respond with one full sentence."
+                "I couldn't catch a clear spoken answer. Click the mic and respond again with one full sentence."
             )
             saved_turn = await self.save_turn_with_mistakes(
                 session_id=str(session_id),
@@ -1632,10 +2509,50 @@ class CoachService:
                 }
 
         selected_model = candidates[0]
-        coaching_result = None
-        latency_ms = None
+        fast_coaching_result: Optional[dict[str, Any]] = None
+        full_coaching_result: Optional[dict[str, Any]] = None
+        fast_latency_ms: Optional[int] = None
+        full_latency_ms: Optional[int] = None
+        two_pass_enabled = bool(
+            str(
+                os.environ.get("COACH_ENABLE_TWO_PASS_VOICE", str(settings.COACH_ENABLE_TWO_PASS_VOICE))
+                or str(settings.COACH_ENABLE_TWO_PASS_VOICE)
+            ).strip().lower() in {"1", "true", "yes", "on"}
+        )
         for idx, model in enumerate(candidates):
             try:
+                if two_pass_enabled and fast_coaching_result is None:
+                    fast_result, observed_fast_latency = await self._coach_fast_with_model(
+                        model=model,
+                        transcript=transcript,
+                        target_language=session.target_language,
+                        focus_area=session.focus_area,
+                        persona_style=persona_style,
+                        asr_confidence_band=asr_confidence_band,
+                    )
+                    selected_model = model
+                    fast_coaching_result = fast_result
+                    fast_latency_ms = observed_fast_latency
+                    fast_follow_up = str(fast_result.get("follow_up_question") or "").strip()
+                    fast_reply = str(fast_result.get("reply") or "").strip()
+                    quick_recast = str(fast_result.get("quick_recast") or "").strip()
+                    needs_confirmation = bool(fast_result.get("needs_confirmation"))
+                    confirmation_text = str(fast_result.get("confirmation_text") or "").strip()
+                    if needs_confirmation and confirmation_text:
+                        fast_reply = confirmation_text
+                    elif quick_recast and asr_confidence_band != "low":
+                        fast_reply = f"{quick_recast} {fast_reply}".strip()
+                    fast_output = fast_reply
+                    if fast_follow_up and fast_follow_up not in fast_reply:
+                        fast_output = f"{fast_reply.rstrip()} {fast_follow_up}".strip()
+                    if fast_output:
+                        yield {
+                            "type": "coach_reply",
+                            "turn_id": turn_id,
+                            "text": fast_output,
+                            "question": fast_follow_up,
+                        }
+
                 result, observed_latency = await self._coach_with_model(
                     model=model,
                     transcript=transcript,
@@ -1646,7 +2563,7 @@ class CoachService:
                     recent_turns=session.turns,
                     persona_style=persona_style,
                 )
-                if observed_latency > self.default_latency_budget_ms and idx + 1 < len(candidates):
+                if (not two_pass_enabled) and observed_latency > self.default_latency_budget_ms and idx + 1 < len(candidates):
                     yield {
                         "type": "model_fallback",
                         "turn_id": turn_id,
@@ -1657,8 +2574,8 @@ class CoachService:
                     }
                     continue
                 selected_model = model
-                coaching_result = result
-                latency_ms = observed_latency
+                full_coaching_result = result
+                full_latency_ms = observed_latency
                 break
             except Exception as exc:
                 logger.warning("Coach model '%s' failed: %s", model, exc)
@@ -1672,42 +2589,81 @@ class CoachService:
                     }
                     continue
 
-        if coaching_result is None:
-            coaching_result = self._fallback_coaching(
+        if full_coaching_result is None:
+            full_coaching_result = self._fallback_coaching(
                 transcript,
                 focus_area=session.focus_area,
                 persona_style=persona_style,
             )
             selected_model = "fallback-heuristic"
-            latency_ms = None
+            full_latency_ms = None
 
-        follow_up_question = str(coaching_result.get("follow_up_question") or "").strip()
-        reply_text = str(coaching_result.get("reply") or "")
+        follow_up_question = str((fast_coaching_result or {}).get("follow_up_question") or "").strip()
+        reply_text = str((fast_coaching_result or {}).get("reply") or "").strip()
+        if not reply_text:
+            follow_up_question = str(full_coaching_result.get("follow_up_question") or "").strip()
+            reply_text = str(full_coaching_result.get("reply") or "").strip()
         final_reply = reply_text
         if follow_up_question and follow_up_question not in reply_text:
             final_reply = f"{reply_text.rstrip()} {follow_up_question}".strip()
+
+        if not fast_coaching_result:
+            yield {
+                "type": "coach_reply",
+                "turn_id": turn_id,
+                "text": final_reply,
+                "question": follow_up_question,
+            }
+
+        combined_latency_ms: Optional[int] = None
+        if fast_latency_ms is not None or full_latency_ms is not None:
+            combined_latency_ms = int((fast_latency_ms or 0) + (full_latency_ms or 0))
+
+        score_raw = full_coaching_result.get("score")
+        score_value: Optional[int]
+        if score_raw is None or asr_confidence_band == "low":
+            score_value = None
+        else:
+            try:
+                score_value = max(0, min(100, int(score_raw)))
+            except (TypeError, ValueError):
+                score_value = None
+
+        forced_uncertain_mistake = None
+        if asr_confidence_band == "low":
+            forced_uncertain_mistake = {
+                "category": "audio",
+                "detail": "Low ASR confidence. Transcript may be inaccurate.",
+                "severity": "low",
+                "suggestion": "Please repeat that sentence clearly or type it in text chat.",
+            }
+
+        explanation_value = full_coaching_result.get("explanation")
+        if asr_confidence_band == "low":
+            base_explanation = str(explanation_value or "").strip()
+            explanation_value = (
+                f"{base_explanation}\nLow ASR confidence: score was withheld.".strip()
+                if base_explanation
+                else "Low ASR confidence: score was withheld."
+            )
 
         saved_turn = await self.save_turn_with_mistakes(
             session_id=str(session_id),
             user_id=user_id,
             transcript=transcript,
             reply=final_reply,
-            score=int(coaching_result.get("score") or 0),
-            correction=coaching_result.get("correction"),
-            explanation=coaching_result.get("explanation"),
+            score=score_value,
+            correction=full_coaching_result.get("correction"),
+            explanation=explanation_value,
             model_id=selected_model,
-            latency_ms=latency_ms,
-            mistakes=coaching_result.get("mistakes") or [],
+            latency_ms=combined_latency_ms,
+            mistakes=(
+                list(full_coaching_result.get("mistakes") or [])
+                + ([forced_uncertain_mistake] if forced_uncertain_mistake else [])
+            ),
         )
         if saved_turn is None:
             raise ValueError("Failed to persist coach turn")
-
-        yield {
-            "type": "coach_reply",
-            "turn_id": turn_id,
-            "text": saved_turn.reply,
-            "question": follow_up_question,
-        }
 
         feedback_payload = {
             "summary": (saved_turn.explanation or "").strip() or "Feedback generated.",
@@ -1733,8 +2689,110 @@ class CoachService:
         yield {
             "type": "score",
             "turn_id": turn_id,
-            "value": saved_turn.score if saved_turn.score is not None else 0,
+            "value": saved_turn.score,
         }
+
+    async def process_text_turn(
+        self,
+        *,
+        user_id: int,
+        session_id: str,
+        text: str,
+        preferred_model: Optional[str] = None,
+        persona_style: Optional[str] = None,
+    ) -> dict[str, Any]:
+        session = await self.get_session(session_id=str(session_id), user_id=user_id)
+        if session is None:
+            raise ValueError("Session not found")
+
+        transcript = re.sub(r"\s+", " ", str(text or "")).strip()
+        if not transcript:
+            raise ValueError("Text is empty")
+        if not self._is_transcript_evaluable(transcript):
+            raise ValueError("Please write at least one clear sentence.")
+
+        available_models = await self._available_ollama_models()
+        candidates = self.get_quality_first_model_order()
+        if available_models:
+            allowed = set(available_models)
+            candidates = [candidate for candidate in candidates if candidate in allowed] or candidates
+        if preferred_model and preferred_model.strip():
+            normalized_model = preferred_model.strip()
+            if normalized_model in candidates:
+                candidates = [normalized_model] + [candidate for candidate in candidates if candidate != normalized_model]
+
+        selected_model = candidates[0]
+        coaching_result: Optional[dict[str, Any]] = None
+        latency_ms: Optional[int] = None
+        for model in candidates:
+            try:
+                result, observed_latency = await self._coach_with_model(
+                    model=model,
+                    transcript=transcript,
+                    target_language=session.target_language,
+                    native_language=session.native_language,
+                    cefr_level=session.cefr_level,
+                    focus_area=session.focus_area,
+                    recent_turns=session.turns,
+                    persona_style=persona_style,
+                )
+                selected_model = model
+                coaching_result = result
+                latency_ms = observed_latency
+                break
+            except Exception as exc:
+                logger.warning("Coach text model '%s' failed: %s", model, exc)
+                continue
+
+        if coaching_result is None:
+            coaching_result = self._fallback_coaching(
+                transcript,
+                focus_area=session.focus_area,
+                persona_style=persona_style,
+            )
+            selected_model = "fallback-heuristic"
+            latency_ms = None
+
+        lt_findings: list[dict[str, Any]] = []
+        try:
+            lt_findings = await self._languagetool_check(text=transcript, language=session.target_language)
+        except Exception:
+            lt_findings = []
+
+        merged_mistakes = list(coaching_result.get("mistakes") or [])
+        merged_mistakes.extend(lt_findings)
+
+        follow_up_question = str(coaching_result.get("follow_up_question") or "").strip()
+        reply_text = str(coaching_result.get("reply") or "").strip()
+        final_reply = reply_text
+        if follow_up_question and follow_up_question not in reply_text:
+            final_reply = f"{reply_text.rstrip()} {follow_up_question}".strip()
+        explanation = str(coaching_result.get("explanation") or "").strip()
+        if lt_findings:
+            lt_hint = f"LanguageTool flagged {len(lt_findings)} additional rule-based issue(s)."
+            explanation = f"{explanation}\n{lt_hint}".strip()
+
+        score_raw = coaching_result.get("score")
+        try:
+            score_value = max(0, min(100, int(score_raw)))
+        except (TypeError, ValueError):
+            score_value = None
+
+        saved_turn = await self.save_turn_with_mistakes(
+            session_id=str(session_id),
+            user_id=user_id,
+            transcript=transcript,
+            reply=final_reply,
+            score=score_value,
+            correction=coaching_result.get("correction"),
+            explanation=explanation,
+            model_id=selected_model,
+            latency_ms=latency_ms,
+            mistakes=merged_mistakes,
+        )
+        if saved_turn is None:
+            raise ValueError("Failed to persist coach turn")
+        return self._serialize_turn(saved_turn)
 
 
 coach_service = CoachService()

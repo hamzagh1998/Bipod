@@ -75,6 +75,22 @@ def recommend_ollama_num_ctx(
     return 32768
 
 
+def recommend_coach_runtime_profile(
+    *,
+    use_gpu: bool,
+    gpu_vram_gb: float,
+    high_vram_threshold_gb: float = 16.0,
+) -> Literal["cpu", "gpu_constrained", "gpu_full"]:
+    """Choose a coach runtime profile based on available GPU memory."""
+    if not use_gpu:
+        return "cpu"
+    if gpu_vram_gb < 6.0:
+        return "cpu"
+    if gpu_vram_gb >= high_vram_threshold_gb:
+        return "gpu_full"
+    return "gpu_constrained"
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env", 
@@ -166,7 +182,11 @@ class Settings(BaseSettings):
     EMBEDDING_MODEL: str = "nomic-embed-text" # Local vector embeddings
 
     # Coach ASR (faster-whisper)
-    COACH_WHISPER_MODEL: str = "small"
+    COACH_WHISPER_MODEL: str = "auto"
+    COACH_WHISPER_FAST_MODEL: str = "auto"
+    COACH_WHISPER_ACCURATE_MODEL: str = "auto"
+    COACH_WHISPER_ENABLE_ACCURATE_RETRY: str = "auto"  # auto | true | false
+    COACH_WHISPER_RETRY_CONFIDENCE_THRESHOLD: float = 0.45
     COACH_WHISPER_MODEL_PATH: str = ""
     COACH_WHISPER_DOWNLOAD_ROOT: str = ""
     COACH_WHISPER_LOCAL_FILES_ONLY: bool = True
@@ -175,13 +195,20 @@ class Settings(BaseSettings):
     COACH_TTS_PROVIDER: str = "espeak"  # espeak | cosyvoice
     COACH_TTS_ALLOW_ESPEAK_FALLBACK: bool = True
     COACH_COSYVOICE_BASE_URL: str = "http://cosyvoice:5001"
-    COACH_COSYVOICE_MODEL_ID: str = "FunAudioLLM/CosyVoice3-0.5B"
+    COACH_COSYVOICE_MODEL_ID: str = "iic/CosyVoice-300M"
     COACH_COSYVOICE_DEVICE: str = "auto"  # auto | cpu | cuda
     COACH_COSYVOICE_LOCAL_FILES_ONLY: bool = True
     COACH_COSYVOICE_DOWNLOAD_ROOT: str = "/app/data/huggingface/hub"
-    COACH_COSYVOICE_TIMEOUT_SEC: int = 60
+    COACH_COSYVOICE_TIMEOUT_SEC: int = 1800
     COACH_VOICE_SECRET_KEY: str = ""
     COACH_VOICE_LIBRARY_DIR: str = "/app/data/coach_voice_library"
+    COACH_LANGUAGETOOL_ENABLED: bool = False
+    COACH_LANGUAGETOOL_BASE_URL: str = "http://languagetool:8010"
+    COACH_LANGUAGETOOL_TIMEOUT_SEC: int = 6
+    COACH_ENABLE_TWO_PASS_VOICE: bool = True
+    COACH_OLLAMA_KEEPALIVE: str = "15m"
+    COACH_RUNTIME_PROFILE: str = "auto"  # auto | cpu | gpu_constrained | gpu_full
+    COACH_HIGH_VRAM_THRESHOLD_GB: float = 16.0
 
     # Ollama runtime tuning
     OLLAMA_NUM_CTX: int | None = None

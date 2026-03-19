@@ -214,6 +214,17 @@ class CoachTtsRequest(BaseModel):
     builtin_voice_id: Optional[str] = Field(default=None, max_length=60)
 
 
+class CoachTextTurnRequest(BaseModel):
+    session_id: str = Field(min_length=1, max_length=120)
+    text: str = Field(min_length=1, max_length=4000)
+    preferred_model: Optional[str] = Field(default=None, min_length=1, max_length=120)
+    persona_style: Optional[str] = Field(default=None, max_length=2000)
+
+
+class CoachRuntimePreloadRequest(BaseModel):
+    mode: Literal["voice", "text", "idle"] = "voice"
+
+
 class CoachVoiceReferenceResponse(BaseModel):
     id: str
     title: str

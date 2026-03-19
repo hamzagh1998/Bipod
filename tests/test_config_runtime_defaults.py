@@ -1,4 +1,4 @@
-from app.core.config import Settings, recommend_ollama_num_ctx
+from app.core.config import Settings, recommend_coach_runtime_profile, recommend_ollama_num_ctx
 
 
 def test_recommend_ollama_num_ctx_cpu_amd64():
@@ -59,3 +59,29 @@ def test_settings_keeps_explicit_ollama_num_ctx_override():
     )
 
     assert settings.OLLAMA_NUM_CTX == 12288
+
+
+def test_recommend_coach_runtime_profile_cpu():
+    assert recommend_coach_runtime_profile(
+        use_gpu=False,
+        gpu_vram_gb=0.0,
+        high_vram_threshold_gb=16.0,
+    ) == "cpu"
+
+
+def test_recommend_coach_runtime_profile_gpu_tiers():
+    assert recommend_coach_runtime_profile(
+        use_gpu=True,
+        gpu_vram_gb=4.0,
+        high_vram_threshold_gb=16.0,
+    ) == "cpu"
+    assert recommend_coach_runtime_profile(
+        use_gpu=True,
+        gpu_vram_gb=8.0,
+        high_vram_threshold_gb=16.0,
+    ) == "gpu_constrained"
+    assert recommend_coach_runtime_profile(
+        use_gpu=True,
+        gpu_vram_gb=24.0,
+        high_vram_threshold_gb=16.0,
+    ) == "gpu_full"

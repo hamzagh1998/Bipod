@@ -234,6 +234,70 @@ function buildStarterQuestion(subject, language) {
   return `Great. Let's practice ${topic} in ${lang}. First question: can you introduce your thoughts on ${topic} in 2-3 sentences?`;
 }
 
+function normalizeTtsStatus(payload) {
+  const source = payload && typeof payload === "object" ? payload : {};
+  const ready = Boolean(source.ready);
+  const state = String(source.state || (ready ? "ready" : "idle")).trim().toLowerCase() || "idle";
+  const detail = String(source.detail || "").trim() || (ready ? "Voice model ready." : "Voice model is preparing.");
+  return {
+    ok: Boolean(source.ok ?? true),
+    engine: String(source.engine || "cosyvoice"),
+    provider: String(source.provider || "cosyvoice"),
+    ready,
+    state,
+    detail,
+    modelId: String(source.model_id || ""),
+    loadedModelId: String(source.loaded_model_id || ""),
+    warmupActive: Boolean(source.warmup_active),
+    updatedAt: source.updated_at ?? null,
+  };
+}
+
+function normalizeRuntimeStatus(payload) {
+  const source = payload && typeof payload === "object" ? payload : {};
+  const components = source.components && typeof source.components === "object" ? source.components : {};
+  const normalizeComponent = (name) => {
+    const component = components[name] && typeof components[name] === "object" ? components[name] : {};
+    return {
+      ready: Boolean(component.ready),
+      state: String(component.state || (component.ready ? "ready" : "idle")).toLowerCase(),
+      detail: String(component.detail || "").trim(),
+    };
+  };
+  return {
+    ok: Boolean(source.ok ?? true),
+    mode: String(source.mode || "idle"),
+    ready: Boolean(source.ready),
+    state: String(source.state || "idle"),
+    components: {
+      llm: normalizeComponent("llm"),
+      asr: normalizeComponent("asr"),
+      tts: normalizeComponent("tts"),
+      languagetool: normalizeComponent("languagetool"),
+    },
+  };
+}
+
+function ttsStateLabel(state, ready) {
+  if (ready) {
+    return "Voice ready";
+  }
+  const normalized = String(state || "idle").trim().toLowerCase();
+  if (normalized === "downloading") {
+    return "Downloading voice model";
+  }
+  if (normalized === "loading") {
+    return "Loading voice model";
+  }
+  if (normalized === "warming") {
+    return "Warming up voice";
+  }
+  if (normalized === "error") {
+    return "Voice service error";
+  }
+  return "Voice standby";
+}
+
 function mapStoredTurn(turn) {
   return {
     id: String(turn?.id || makeId("stored")),
@@ -323,6 +387,7 @@ function CoachApp() {
   const [subjectChoice, setSubjectChoice] = useState(SUBJECT_OPTIONS[0]);
   const [customSubject, setCustomSubject] = useState("");
   const [languageChoice, setLanguageChoice] = useState("English");
+  const [supportedLanguages, setSupportedLanguages] = useState([]);
   const [personaChoice, setPersonaChoice] = useState(PERSONA_OPTIONS[0].id);
   const [voiceOptions, setVoiceOptions] = useState([]);
   const [voiceChoice, setVoiceChoice] = useState(DEFAULT_BUILTIN_VOICE_CHOICE);
@@ -345,6 +410,7 @@ function CoachApp() {
 
   const [turns, setTurns] = useState([]);
   const [currentTurn, setCurrentTurn] = useState(null);
+  const [textDraft, setTextDraft] = useState("");
 
   const [isRecording, setIsRecording] = useState(false);
   const [isSending, setIsSending] = useState(false);
@@ -356,11 +422,14 @@ function CoachApp() {
   const [summary, setSummary] = useState(null);
   const [conversationEnded, setConversationEnded] = useState(false);
   const [viewMode, setViewMode] = useState("chat");
+  const [showSessionSettings, setShowSessionSettings] = useState(false);
   const [voiceStage, setVoiceStage] = useState({
     speaker: "ai",
     text: "",
     status: "idle",
   });
+  const [ttsStatus, setTtsStatus] = useState(() => normalizeTtsStatus(null));
+  const [runtimeStatus, setRuntimeStatus] = useState(() => normalizeRuntimeStatus(null));
 
   const mediaRecorderRef = useRef(null);
   const mediaStreamRef = useRef(null);
@@ -479,10 +548,47 @@ function CoachApp() {
       return;
     }
     refreshSessions();
+    refreshSupportedLanguages();
     refreshBuiltinVoices();
     refreshVoiceProfiles();
+    void preloadCoachRuntime("text", { silent: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authState, token]);
+
+  useEffect(() => {
+    if (authState !== "ready" || !token) {
+      setTtsStatus(normalizeTtsStatus(null));
+      return;
+    }
+
+    let cancelled = false;
+    const poll = async () => {
+      if (cancelled) {
+        return;
+      }
+      const shouldWarmTts = Boolean(sessionId) && viewMode === "voice";
+      await refreshTtsStatus({ warm: shouldWarmTts, silent: true });
+      const runtimeMode = sessionId ? (viewMode === "voice" ? "voice" : "text") : "idle";
+      await refreshRuntimeStatus({ warm: false, mode: runtimeMode, silent: true });
+    };
+    void poll();
+    const intervalId = window.setInterval(() => {
+      void poll();
+    }, 12000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authState, token, sessionId, viewMode]);
+
+  useEffect(() => {
+    if (!sessionId || !token || authState !== "ready") {
+      return;
+    }
+    const mode = viewMode === "voice" ? "voice" : "text";
+    void preloadCoachRuntime(mode, { silent: true });
+  }, [sessionId, viewMode, token, authState]);
 
   useEffect(() => {
     activeLanguageRef.current = activeLanguage || languageChoice || "English";
@@ -653,6 +759,30 @@ function CoachApp() {
     }
   }
 
+  async function refreshSupportedLanguages() {
+    if (!token) {
+      return;
+    }
+    try {
+      const payload = await apiFetchJson("/api/v1/coach/languages/supported", token);
+      if (!Array.isArray(payload) || !payload.length) {
+        return;
+      }
+      const selectable = payload.filter((item) => Boolean(item?.selectable) && item?.name);
+      setSupportedLanguages(selectable);
+      setLanguageChoice((current) => {
+        const found = selectable.find((item) => String(item.name) === String(current));
+        if (found) {
+          return current;
+        }
+        const defaultItem = selectable.find((item) => Boolean(item?.is_default));
+        return String(defaultItem?.name || selectable[0]?.name || current || "English");
+      });
+    } catch {
+      // Keep static fallback list.
+    }
+  }
+
   async function refreshBuiltinVoices() {
     if (!token) {
       return;
@@ -701,6 +831,78 @@ function CoachApp() {
     }
   }
 
+  async function refreshTtsStatus({ warm = false, silent = true } = {}) {
+    if (!token) {
+      return null;
+    }
+    const path = warm ? "/api/v1/coach/tts/status?warm=true" : "/api/v1/coach/tts/status";
+    try {
+      const payload = await apiFetchJson(path, token);
+      const normalized = normalizeTtsStatus(payload);
+      setTtsStatus(normalized);
+      return normalized;
+    } catch (error) {
+      const fallback = normalizeTtsStatus({
+        ok: false,
+        engine: "cosyvoice",
+        provider: "cosyvoice",
+        ready: false,
+        state: "error",
+        detail: error?.message || "Voice status is unavailable.",
+      });
+      setTtsStatus(fallback);
+      if (!silent) {
+        setErrorMessage(fallback.detail);
+      }
+      return fallback;
+    }
+  }
+
+  async function refreshRuntimeStatus({ warm = false, mode = "voice", silent = true } = {}) {
+    if (!token) {
+      return null;
+    }
+    const query = new URLSearchParams();
+    if (warm) {
+      query.set("warm", "true");
+    }
+    if (mode) {
+      query.set("mode", mode);
+    }
+    const path = `/api/v1/coach/runtime/status${query.toString() ? `?${query.toString()}` : ""}`;
+    try {
+      const payload = await apiFetchJson(path, token);
+      const normalized = normalizeRuntimeStatus(payload);
+      setRuntimeStatus(normalized);
+      return normalized;
+    } catch (error) {
+      if (!silent) {
+        setErrorMessage(error?.message || "Runtime status is unavailable.");
+      }
+      return null;
+    }
+  }
+
+  async function preloadCoachRuntime(mode = "voice", { silent = true } = {}) {
+    if (!token) {
+      return null;
+    }
+    try {
+      const payload = await apiFetchJson("/api/v1/coach/runtime/preload", token, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mode }),
+      });
+      setRuntimeStatus(normalizeRuntimeStatus(payload));
+      return payload;
+    } catch (error) {
+      if (!silent) {
+        setErrorMessage(error?.message || "Runtime preload failed.");
+      }
+      return null;
+    }
+  }
+
   function hydrateSession(record, loadedTurns = []) {
     const subject = String(record?.focus_area || record?.title || "Conversation").trim() || "Conversation";
     const language = String(record?.target_language || "English").trim() || "English";
@@ -720,6 +922,7 @@ function CoachApp() {
       }
     }
     setConversationEnded(status === "completed");
+    setShowSessionSettings(false);
     setStarterQuestion(buildStarterQuestion(subject, language));
     starterPlaybackKeyRef.current = "";
     setSummary(null);
@@ -908,6 +1111,7 @@ function CoachApp() {
       body: JSON.stringify(payload),
     });
     if (!response.ok) {
+      void refreshTtsStatus({ warm: true, silent: true });
       const raw = await response.text().catch(() => "");
       let detail = raw || `TTS failed (${response.status})`;
       if (raw) {
@@ -999,6 +1203,7 @@ function CoachApp() {
     try {
       await playServerTts(content);
     } catch (error) {
+      void refreshTtsStatus({ warm: true, silent: true });
       setVoiceStage((current) => ({ ...current, status: "idle" }));
       if (forcePlay) {
         setErrorMessage(error?.message || "Could not play AI voice.");
@@ -1075,6 +1280,7 @@ function CoachApp() {
 
       setSessions((prev) => [sessionRecord, ...prev.filter((item) => item.id !== sessionRecord.id)]);
       hydrateSession(sessionRecord, []);
+      void preloadCoachRuntime("voice", { silent: true });
       setStatusMessage(`Conversation started on ${selectedSubject} in ${languageChoice}. Click the mic to start and click again to stop.`);
     } catch (error) {
       setErrorMessage(error?.message || "Could not start conversation.");
@@ -1255,9 +1461,13 @@ function CoachApp() {
 
           if (eventType === "stt_final") {
             const finalText = eventText(event);
+            const confidenceBand = String(event?.asr_confidence_band || "").toLowerCase();
             updateDraft((draft) => {
               draft.transcript = finalText || draft.transcript;
               draft.partialTranscript = "";
+              if (confidenceBand) {
+                draft.asrConfidenceBand = confidenceBand;
+              }
               return draft;
             });
             if (finalText) {
@@ -1266,6 +1476,9 @@ function CoachApp() {
                 text: finalText,
                 status: "processing",
               });
+            }
+            if (confidenceBand === "low") {
+              setStatusMessage("ASR is uncertain. The coach may ask for confirmation.");
             }
             continue;
           }
@@ -1375,6 +1588,88 @@ function CoachApp() {
     }
   }
 
+  async function sendTextTurn() {
+    if (!sessionId || !token || isSending || isEnding || conversationEnded) {
+      return;
+    }
+    const message = String(textDraft || "").trim();
+    if (!message) {
+      return;
+    }
+    setErrorMessage("");
+    setIsSending(true);
+    setStatusMessage("AI is reviewing your text...");
+
+    const draft = {
+      id: makeId("text"),
+      transcript: message,
+      partialTranscript: "",
+      reply: "",
+      question: "",
+      correction: "",
+      feedback: "",
+      mistakes: [],
+      score: null,
+      error: "",
+      startedAt: new Date().toISOString(),
+      endedAt: null,
+    };
+    currentTurnRef.current = draft;
+    setCurrentTurn({ ...draft });
+
+    try {
+      const payload = await apiFetchJson("/api/v1/coach/turns/text", token, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          session_id: sessionId,
+          text: message,
+          persona_style: activePersona.prompt,
+        }),
+      });
+
+      const mappedTurn = mapStoredTurn(payload);
+      mappedTurn.id = String(payload?.id || draft.id);
+      mappedTurn.transcript = message;
+      mappedTurn.endedAt = new Date().toISOString();
+      setTurns((prev) => [...prev, mappedTurn]);
+      setCurrentTurn(null);
+      currentTurnRef.current = null;
+      setTextDraft("");
+      setStatusMessage("Your turn. Answer the next question.");
+      if (mappedTurn.reply) {
+        setVoiceStage({
+          speaker: "ai",
+          text: mappedTurn.reply,
+          status: "speaking",
+        });
+        void speakCoachText(mappedTurn.reply);
+      }
+    } catch (error) {
+      updateDraft((next) => {
+        next.error = error?.message || "Failed to process this text turn.";
+        return next;
+      });
+      const failedTurn = {
+        ...currentTurnRef.current,
+        endedAt: new Date().toISOString(),
+      };
+      setTurns((prev) => [...prev, failedTurn]);
+      setCurrentTurn(null);
+      currentTurnRef.current = null;
+      setErrorMessage(error?.message || "Text turn failed.");
+      setStatusMessage("Turn failed. Try again.");
+      setVoiceStage({
+        speaker: "ai",
+        text: error?.message || "Turn failed. Please try again.",
+        status: "idle",
+      });
+    } finally {
+      setIsSending(false);
+      refreshSessions();
+    }
+  }
+
   function handleMicToggle(event) {
     event.preventDefault();
     if (isRecording) {
@@ -1424,8 +1719,10 @@ function CoachApp() {
     setTurns([]);
     setCurrentTurn(null);
     currentTurnRef.current = null;
+    setTextDraft("");
     setSummary(null);
     setConversationEnded(false);
+    setShowSessionSettings(false);
     setViewMode("chat");
     setReferenceClipId("");
     setReferenceClipTitle("");
@@ -1452,6 +1749,9 @@ function CoachApp() {
   if (authState === "missing" || authState === "invalid") {
     return <AuthGate />;
   }
+
+  const ttsBadgeClass = `coach-tts-badge ${ttsStatus.ready ? "ready" : ""} state-${ttsStatus.state || "idle"}`;
+  const aiSpeakingNow = voiceStageSnapshot.speaker === "ai" && voiceStageSnapshot.status === "speaking";
 
   return (
     <div className="coach-shell">
@@ -1507,8 +1807,31 @@ function CoachApp() {
             <span className="material-symbols-rounded">arrow_back</span>
             Back to chat
           </button>
-          <h1>AI Speaking Coach</h1>
+          <div className="coach-top-head">
+            <h1>AI Speaking Coach</h1>
+            <div className={ttsBadgeClass} title={ttsStatus.detail}>
+              <span className="coach-tts-badge-dot" />
+              <div className="coach-tts-badge-text">
+                <strong>{ttsStateLabel(ttsStatus.state, ttsStatus.ready)}</strong>
+                <span>{ttsStatus.detail}</span>
+              </div>
+            </div>
+          </div>
           <p>{statusMessage}</p>
+          <div className="coach-runtime-row" aria-label="Runtime readiness">
+            <span className={`coach-runtime-chip ${runtimeStatus.components.llm.ready ? "ready" : ""}`}>
+              LLM {runtimeStatus.components.llm.ready ? "ready" : runtimeStatus.components.llm.state}
+            </span>
+            <span className={`coach-runtime-chip ${runtimeStatus.components.asr.ready ? "ready" : ""}`}>
+              ASR {runtimeStatus.components.asr.ready ? "ready" : runtimeStatus.components.asr.state}
+            </span>
+            <span className={`coach-runtime-chip ${runtimeStatus.components.tts.ready ? "ready" : ""}`}>
+              TTS {runtimeStatus.components.tts.ready ? "ready" : runtimeStatus.components.tts.state}
+            </span>
+            <span className={`coach-runtime-chip ${runtimeStatus.components.languagetool.ready ? "ready" : ""}`}>
+              LT {runtimeStatus.components.languagetool.ready ? "ready" : runtimeStatus.components.languagetool.state}
+            </span>
+          </div>
         </div>
 
         {!sessionId ? (
@@ -1534,7 +1857,7 @@ function CoachApp() {
 
             <label htmlFor="language-select">Language (supported)</label>
             <select id="language-select" value={languageChoice} onChange={(event) => setLanguageChoice(event.target.value)}>
-              {LANGUAGE_OPTIONS.map((language) => (
+              {(supportedLanguages.length ? supportedLanguages.map((item) => String(item.name || "")) : LANGUAGE_OPTIONS).map((language) => (
                 <option key={language} value={language}>
                   {language}
                 </option>
@@ -1659,79 +1982,100 @@ function CoachApp() {
           <section className="coach-session-shell">
             <div className="coach-meta-row">
               <div className="coach-chip">Subject: {activeSubject}</div>
-              <div className="coach-chip">Language: {activeLanguage}</div>
+              <div className="coach-chip">Language locked: {activeLanguage}</div>
               <div className="coach-chip">{username}</div>
               <div className="coach-chip">Turns: {turns.length}</div>
               <div className="coach-chip">Status: {activeSessionStatus}</div>
               <div className="coach-chip">Persona: {activePersona.label}</div>
             </div>
 
-            <div className="coach-inline-controls">
-              <label htmlFor="session-persona-select">Persona</label>
-              <select
-                id="session-persona-select"
-                value={activePersonaId}
-                onChange={(event) => {
-                  const nextPersona = event.target.value;
-                  setActivePersonaId(nextPersona);
-                  setPersonaChoice(nextPersona);
-                }}
-              >
-                {PERSONA_OPTIONS.map((persona) => (
-                  <option key={persona.id} value={persona.id}>
-                    {persona.label}
-                  </option>
-                ))}
-              </select>
+            <div className="coach-settings-shell">
+              <div className="coach-settings-head">
+                <div className="coach-settings-summary">
+                  Persona: <strong>{activePersona.label}</strong> · Voice:{" "}
+                  <strong>{selectedBuiltinVoice?.name || "Selected voice"}</strong>
+                </div>
+                <button
+                  type="button"
+                  className="coach-settings-toggle"
+                  onClick={() => setShowSessionSettings((current) => !current)}
+                  aria-expanded={showSessionSettings}
+                  aria-controls="coach-session-settings"
+                >
+                  <span className="material-symbols-rounded">{showSessionSettings ? "expand_less" : "expand_more"}</span>
+                  {showSessionSettings ? "Hide settings" : "Show settings"}
+                </button>
+              </div>
 
-              <label htmlFor="session-voice-select">Voice</label>
-              <select
-                id="session-voice-select"
-                value={voiceChoice}
-                onChange={(event) => setVoiceChoice(event.target.value)}
-              >
-                {builtinVoices.map((voice) => (
-                  <option key={voice.choice_id || `builtin:${voice.id}`} value={voice.choice_id || `builtin:${voice.id}`}>
-                    {voice.name} (clone sample)
-                  </option>
-                ))}
-                {SERVER_VOICE_OPTIONS.map((voice) => (
-                  <option key={voice.id} value={voice.id}>
-                    {voice.label} (server)
-                  </option>
-                ))}
-                <option value="session_clone">Session cloned voice</option>
-                {voiceProfiles.map((profile) => (
-                  <option key={profile.id} value={`profile:${profile.id}`}>
-                    {profile.name} (profile)
-                  </option>
-                ))}
-                {voiceOptions.map((voice) => (
-                  <option key={voice.name} value={voice.name}>
-                    {voice.name} ({voice.lang || "unknown"})
-                  </option>
-                ))}
-              </select>
+              {showSessionSettings ? (
+                <div className="coach-inline-controls" id="coach-session-settings">
+                  <label htmlFor="session-persona-select">Persona</label>
+                  <select
+                    id="session-persona-select"
+                    value={activePersonaId}
+                    onChange={(event) => {
+                      const nextPersona = event.target.value;
+                      setActivePersonaId(nextPersona);
+                      setPersonaChoice(nextPersona);
+                    }}
+                  >
+                    {PERSONA_OPTIONS.map((persona) => (
+                      <option key={persona.id} value={persona.id}>
+                        {persona.label}
+                      </option>
+                    ))}
+                  </select>
 
-              {selectedBuiltinVoice?.avatar_data_url ? (
-                <div className="coach-voice-preview">
-                  <img src={selectedBuiltinVoice.avatar_data_url} alt={`${selectedBuiltinVoice.name} avatar`} />
-                  <div>
-                    <strong>{selectedBuiltinVoice.name}</strong>
-                    <p>Using clone sample voice</p>
-                  </div>
+                  <label htmlFor="session-voice-select">Voice</label>
+                  <select
+                    id="session-voice-select"
+                    value={voiceChoice}
+                    onChange={(event) => setVoiceChoice(event.target.value)}
+                  >
+                    {builtinVoices.map((voice) => (
+                      <option key={voice.choice_id || `builtin:${voice.id}`} value={voice.choice_id || `builtin:${voice.id}`}>
+                        {voice.name} (clone sample)
+                      </option>
+                    ))}
+                    {SERVER_VOICE_OPTIONS.map((voice) => (
+                      <option key={voice.id} value={voice.id}>
+                        {voice.label} (server)
+                      </option>
+                    ))}
+                    <option value="session_clone">Session cloned voice</option>
+                    {voiceProfiles.map((profile) => (
+                      <option key={profile.id} value={`profile:${profile.id}`}>
+                        {profile.name} (profile)
+                      </option>
+                    ))}
+                    {voiceOptions.map((voice) => (
+                      <option key={voice.name} value={voice.name}>
+                        {voice.name} ({voice.lang || "unknown"})
+                      </option>
+                    ))}
+                  </select>
+
+                  {selectedBuiltinVoice?.avatar_data_url ? (
+                    <div className="coach-voice-preview">
+                      <img src={selectedBuiltinVoice.avatar_data_url} alt={`${selectedBuiltinVoice.name} avatar`} />
+                      <div>
+                        <strong>{selectedBuiltinVoice.name}</strong>
+                        <p>Using clone sample voice</p>
+                      </div>
+                    </div>
+                  ) : null}
+
+                  <label className="coach-checkbox-row" htmlFor="session-auto-speak-toggle">
+                    <input
+                      id="session-auto-speak-toggle"
+                      type="checkbox"
+                      checked={autoSpeakReplies}
+                      onChange={(event) => setAutoSpeakReplies(event.target.checked)}
+                    />
+                    Auto-speak replies
+                  </label>
                 </div>
               ) : null}
-
-              <label className="coach-checkbox-row" htmlFor="session-auto-speak-toggle">
-                <input
-                  id="session-auto-speak-toggle"
-                  type="checkbox"
-                  checked={autoSpeakReplies}
-                  onChange={(event) => setAutoSpeakReplies(event.target.checked)}
-                />
-                Auto-speak replies
-              </label>
 
               <div className="coach-view-toggle" role="tablist" aria-label="Conversation view">
                 <button
@@ -1798,16 +2142,49 @@ function CoachApp() {
                     <div>{currentTurn.transcript || currentTurn.partialTranscript || "Listening..."}</div>
                   </div>
                 ) : null}
+
+                {!conversationEnded ? (
+                  <div className="coach-text-compose">
+                    <input
+                      type="text"
+                      value={textDraft}
+                      onChange={(event) => setTextDraft(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" && !event.shiftKey) {
+                          event.preventDefault();
+                          void sendTextTurn();
+                        }
+                      }}
+                      placeholder="Type a message instead of speaking..."
+                      disabled={isSending || isEnding}
+                    />
+                    <button
+                      type="button"
+                      className="coach-btn coach-btn-small"
+                      onClick={() => void sendTextTurn()}
+                      disabled={isSending || isEnding || !String(textDraft || "").trim()}
+                    >
+                      Send
+                    </button>
+                  </div>
+                ) : null}
               </section>
             ) : (
-              <section className="coach-voice-stage" aria-live="polite">
-                <div className="coach-voice-avatar-wrap">
+              <section className={`coach-voice-stage ${aiSpeakingNow ? "ai-speaking" : ""}`} aria-live="polite">
+                <div className={`coach-voice-avatar-wrap ${aiSpeakingNow ? "is-speaking" : ""}`}>
                   {selectedBuiltinVoice?.avatar_data_url ? (
                     <img src={selectedBuiltinVoice.avatar_data_url} alt={`${selectedBuiltinVoice.name} avatar`} />
                   ) : (
                     <div className="coach-voice-avatar-fallback">{String(activePersona.label || "A").charAt(0)}</div>
                   )}
                 </div>
+                {voiceStageSnapshot.speaker === "ai" ? (
+                  <div className={`coach-voice-wave ${aiSpeakingNow ? "active" : ""}`} aria-hidden="true">
+                    {Array.from({ length: 14 }).map((_, index) => (
+                      <span key={`wave-${index}`} style={{ "--bar-index": `${index}` }} />
+                    ))}
+                  </div>
+                ) : null}
                 <div className="coach-voice-stage-meta">
                   <strong>{voiceStageSnapshot.speaker === "ai" ? activePersona.label : "You"}</strong>
                   <span>

@@ -2,6 +2,7 @@ FROM python:3.11-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
+ENV MODELSCOPE_CACHE=/app/data/modelscope
 
 RUN apt-get update && apt-get install -y \
     git \
@@ -16,7 +17,20 @@ RUN pip install --no-cache-dir --upgrade pip \
     && pip install --no-cache-dir -r /tmp/requirements.txt \
     && pip install --no-cache-dir torch==2.5.1 torchaudio==2.5.1 --index-url https://download.pytorch.org/whl/cpu \
     && git clone --depth 1 https://github.com/FunAudioLLM/CosyVoice.git /opt/CosyVoice \
-    && (pip install --no-cache-dir -r /opt/CosyVoice/requirements.txt || true)
+    && pip install --no-cache-dir \
+      setuptools \
+      wheel \
+      tqdm \
+      hyperpyyaml \
+      modelscope \
+      onnxruntime \
+      inflect \
+      librosa \
+      soundfile \
+      omegaconf \
+      transformers \
+      conformer \
+      openai-whisper
 
 ENV PYTHONPATH=/opt/CosyVoice
 

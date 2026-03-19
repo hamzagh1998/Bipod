@@ -372,6 +372,119 @@ def test_coach_tts_endpoint_returns_audio(monkeypatch):
     assert response.body == b"RIFF....WAVE"
 
 
+def test_coach_tts_status_endpoint(monkeypatch):
+    captured = {}
+
+    async def fake_get_tts_status(*, warm):
+        captured["warm"] = warm
+        return {
+            "ok": True,
+            "engine": "cosyvoice",
+            "provider": "cosyvoice",
+            "ready": False,
+            "state": "downloading",
+            "detail": "Downloading voice model assets.",
+            "model_id": "iic/CosyVoice-300M",
+            "loaded_model_id": "",
+            "warmup_active": True,
+            "updated_at": 123.4,
+        }
+
+    monkeypatch.setattr(coach_module.coach_service, "get_tts_status", fake_get_tts_status)
+
+    payload = asyncio.run(coach_module.tts_status(warm=True, user_id=3))
+
+    assert captured == {"warm": True}
+    assert payload["engine"] == "cosyvoice"
+    assert payload["ready"] is False
+    assert payload["state"] == "downloading"
+
+
+def test_coach_runtime_endpoints(monkeypatch):
+    captured = {}
+
+    async def fake_get_runtime_status(*, warm, mode):
+        captured["status"] = {"warm": warm, "mode": mode}
+        return {"ok": True, "ready": False, "mode": mode or "voice", "state": "warming", "components": {}}
+
+    async def fake_preload_runtime(*, mode):
+        captured["preload"] = {"mode": mode}
+        return {"ok": True, "ready": True, "mode": mode, "state": "ready", "components": {}}
+
+    monkeypatch.setattr(coach_module.coach_service, "get_runtime_status", fake_get_runtime_status)
+    monkeypatch.setattr(coach_module.coach_service, "preload_runtime", fake_preload_runtime)
+
+    status_payload = asyncio.run(coach_module.runtime_status(warm=True, mode="text", user_id=3))
+    preload_payload = asyncio.run(
+        coach_module.runtime_preload(
+            payload=coach_module.CoachRuntimePreloadRequest(mode="voice"),
+            user_id=3,
+        )
+    )
+
+    assert captured["status"] == {"warm": True, "mode": "text"}
+    assert captured["preload"] == {"mode": "voice"}
+    assert status_payload["state"] == "warming"
+    assert preload_payload["state"] == "ready"
+
+
+def test_coach_text_turn_endpoint(monkeypatch):
+    session_id = str(uuid4())
+    captured = {}
+
+    async def fake_get_session(requested_session_id, user_id):
+        assert requested_session_id == session_id
+        assert user_id == 7
+        return SimpleNamespace(id=session_id)
+
+    async def fake_process_text_turn(*, user_id, session_id, text, preferred_model, persona_style):
+        captured.update(
+            {
+                "user_id": user_id,
+                "session_id": session_id,
+                "text": text,
+                "preferred_model": preferred_model,
+                "persona_style": persona_style,
+            }
+        )
+        return {"id": 1, "session_id": session_id, "transcript": text, "reply": "Good. Keep going.", "score": 82, "mistakes": []}
+
+    monkeypatch.setattr(coach_module.coach_service, "get_session", fake_get_session)
+    monkeypatch.setattr(coach_module.coach_service, "process_text_turn", fake_process_text_turn)
+
+    payload = asyncio.run(
+        coach_module.text_turn(
+            payload=coach_module.CoachTextTurnRequest(
+                session_id=session_id,
+                text="I usually wake up at six and review my tasks.",
+                preferred_model="qwen3:8b",
+                persona_style="calm tactical persona",
+            ),
+            user_id=7,
+        )
+    )
+    assert payload["score"] == 82
+    assert captured["preferred_model"] == "qwen3:8b"
+
+
+def test_coach_supported_languages_endpoint(monkeypatch):
+    expected = [
+        {
+            "code": "en",
+            "name": "English",
+            "asr_supported": True,
+            "tts_supported": True,
+            "languagetool_supported": False,
+            "selectable": True,
+            "is_default": True,
+        }
+    ]
+
+    monkeypatch.setattr(coach_module.coach_service, "supported_languages", lambda: expected)
+    payload = asyncio.run(coach_module.supported_languages(user_id=5))
+    assert payload == expected
+
+
 def test_coach_voice_profile_endpoints(monkeypatch):
     now = datetime(2026, 3, 19, tzinfo=timezone.utc)
     uploaded = {

@@ -7,6 +7,8 @@ import os
 import shutil
 import subprocess
 import tempfile
+import threading
+import time
 import wave
 from pathlib import Path
 from typing import Any, Optional
@@ -27,12 +29,119 @@ class SynthesizeRequest(BaseModel):
     voice_mode: str = Field(default="preset")
     model_id: Optional[str] = Field(default=None)
     reference_audio_b64: Optional[str] = Field(default=None)
+    builtin_voice_id: Optional[str] = Field(default=None)
+    runtime_device: Optional[str] = Field(default=None)
 
 
 class CosyVoiceRuntime:
     def __init__(self) -> None:
         self._model: Any = None
         self._model_id: Optional[str] = None
+        self._model_device: Optional[str] = None
+        self._last_init_error: str = ""
+        self._init_lock = threading.Lock()
+        self._warmup_lock = threading.Lock()
+        self._status_lock = threading.Lock()
+        self._warmup_thread: Optional[threading.Thread] = None
+        self._status_state = "idle"
+        self._status_detail = "Voice model is idle."
+        self._status_updated_at = time.time()
+        self._status_model_id: Optional[str] = None
+        self._builtin_voice_cache: dict[str, bytes] = {}
+
+    def _set_status(self, *, state: str, detail: str, model_id: Optional[str]) -> None:
+        with self._status_lock:
+            self._status_state = str(state)
+            self._status_detail = str(detail)
+            self._status_updated_at = time.time()
+            self._status_model_id = model_id
+
+    def status_snapshot(self, *, requested_model_id: Optional[str]) -> dict[str, Any]:
+        with self._status_lock:
+            state = str(self._status_state)
+            detail = str(self._status_detail)
+            updated_at = float(self._status_updated_at)
+            status_model_id = self._status_model_id
+            warmup_active = bool(self._warmup_thread and self._warmup_thread.is_alive())
+        loaded_model_id = str(self._model_id or "")
+        loaded_runtime_device = str(self._model_device or "")
+        ready = bool(self._model is not None and loaded_model_id)
+        if ready and state != "ready":
+            state = "ready"
+            detail = "Voice model ready."
+        return {
+            "ok": True,
+            "service": "cosyvoice-sidecar",
+            "engine": "cosyvoice",
+            "ready": ready,
+            "state": state,
+            "detail": detail,
+            "requested_model_id": str(requested_model_id or ""),
+            "model_id": str(status_model_id or requested_model_id or ""),
+            "loaded_model_id": loaded_model_id,
+            "runtime_device": loaded_runtime_device,
+            "warmup_active": warmup_active,
+            "updated_at": updated_at,
+        }
+
+    def _detect_gpu_available(self) -> bool:
+        try:
+            probe = subprocess.run(["nvidia-smi", "-L"], check=True, capture_output=True, text=True)
+            return bool(str(probe.stdout or "").strip())
+        except Exception:
+            return False
+
+    def _detect_gpu_vram_gb(self) -> float:
+        try:
+            probe = subprocess.run(
+                ["nvidia-smi", "--query-gpu=memory.total", "--format=csv,noheader,nounits"],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            values_mb = [float(line.strip()) for line in str(probe.stdout or "").splitlines() if line.strip()]
+            if not values_mb:
+                return 0.0
+            return max(values_mb) / 1024.0
+        except Exception:
+            return 0.0
+
+    def _resolve_runtime_device(self, requested_device: Optional[str]) -> str:
+        runtime_device = str(requested_device or "").strip().lower()
+        if runtime_device in {"cpu", "cuda"}:
+            return runtime_device
+
+        configured = str(os.environ.get("COACH_COSYVOICE_DEVICE") or "auto").strip().lower()
+        if configured in {"cpu", "cuda"}:
+            return configured
+
+        threshold_raw = str(os.environ.get("COACH_HIGH_VRAM_THRESHOLD_GB") or "16").strip()
+        try:
+            high_vram_threshold = max(8.0, float(threshold_raw))
+        except ValueError:
+            high_vram_threshold = 16.0
+        if self._detect_gpu_available() and self._detect_gpu_vram_gb() >= high_vram_threshold:
+            return "cuda"
+        return "cpu"
+
+    def ensure_warmup(self, requested_model_id: Optional[str], requested_device: Optional[str] = None) -> bool:
+        model_id = str(requested_model_id or os.environ.get("COACH_COSYVOICE_MODEL_ID") or "").strip() or "iic/CosyVoice-300M"
+        runtime_device = self._resolve_runtime_device(requested_device)
+        if self._model is not None and self._model_id == model_id and self._model_device == runtime_device:
+            self._set_status(state="ready", detail="Voice model ready.", model_id=model_id)
+            return False
+        with self._warmup_lock:
+            if self._warmup_thread and self._warmup_thread.is_alive():
+                return False
+            self._set_status(
+                state="warming",
+                detail=f"Warming voice model ({model_id}) on {runtime_device}. First synthesis may take a while.",
+                model_id=model_id,
+            )
+            thread = threading.Thread(target=self._init_model, args=(model_id, runtime_device), daemon=True)
+            self._warmup_thread = thread
+            thread.start()
+            return True
 
     def _to_wav_bytes(self, samples: np.ndarray, sample_rate: int) -> bytes:
         normalized = np.asarray(samples, dtype=np.float32).flatten()
@@ -63,32 +172,108 @@ class CosyVoiceRuntime:
         payload = np.asarray(payload, dtype=np.float32)
         return payload, sample_rate
 
-    def _init_model(self, requested_model_id: Optional[str]) -> bool:
-        model_id = str(requested_model_id or os.environ.get("COACH_COSYVOICE_MODEL_ID") or "").strip()
-        if not model_id:
-            model_id = "FunAudioLLM/CosyVoice3-0.5B"
-        if self._model is not None and self._model_id == model_id:
+    def _init_model(self, requested_model_id: Optional[str], runtime_device: Optional[str] = None) -> bool:
+        with self._init_lock:
+            model_id = str(requested_model_id or os.environ.get("COACH_COSYVOICE_MODEL_ID") or "").strip()
+            if not model_id:
+                model_id = "iic/CosyVoice-300M"
+            resolved_device = self._resolve_runtime_device(runtime_device)
+            if self._model is not None and self._model_id == model_id and self._model_device == resolved_device:
+                self._set_status(state="ready", detail="Voice model ready.", model_id=model_id)
+                return True
+
+            model_source = model_id
+            if not Path(model_id).exists():
+                self._set_status(state="downloading", detail=f"Downloading voice model assets for {model_id}.", model_id=model_id)
+                local_only = str(os.environ.get("COACH_COSYVOICE_LOCAL_FILES_ONLY", "false")).strip().lower() in {
+                    "1",
+                    "true",
+                    "yes",
+                    "on",
+                }
+                cache_dir = str(os.environ.get("COACH_COSYVOICE_DOWNLOAD_ROOT", "/app/data/modelscope")).strip()
+                allow_patterns = [
+                    "cosyvoice*.yaml",
+                    "llm.pt",
+                    "flow.pt",
+                    "hift.pt",
+                    "campplus.onnx",
+                    "speech_tokenizer*.onnx",
+                    "spk2info.pt",
+                    "CosyVoice-BlankEN/*",
+                    "tokenizer*",
+                    "*.json",
+                    "*.model",
+                    "*.txt",
+                ]
+                ignore_patterns = [
+                    "*.zip",
+                    "*.plan",
+                    "*.engine",
+                    "*.onnx.data",
+                    "*.tar",
+                    "*.tensorrt*",
+                ]
+                try:
+                    from modelscope import snapshot_download  # type: ignore
+                    model_source = snapshot_download(
+                        model_id,
+                        cache_dir=cache_dir,
+                        local_files_only=local_only,
+                        allow_patterns=allow_patterns,
+                        ignore_patterns=ignore_patterns,
+                    )
+                except Exception as exc:
+                    self._last_init_error = f"CosyVoice model download failed ({model_id}): {exc}"
+                    self._set_status(state="error", detail=self._last_init_error, model_id=model_id)
+                    logger.exception("CosyVoice model download failed for model_id=%s", model_id)
+                    self._model = None
+                    self._model_id = None
+                    self._model_device = None
+                    return False
+
+            self._set_status(state="loading", detail=f"Loading voice model {model_id}.", model_id=model_id)
+            try:
+                from cosyvoice.cli.cosyvoice import CosyVoice  # type: ignore
+            except Exception as exc:
+                self._last_init_error = f"CosyVoice import failed: {exc}"
+                self._set_status(state="error", detail=self._last_init_error, model_id=model_id)
+                logger.exception("CosyVoice import failed for model_id=%s", model_id)
+                self._model = None
+                self._model_id = None
+                self._model_device = None
+                return False
+
+            kwargs = {"device": resolved_device}
+
+            # CosyVoice constructor signatures vary by release; keep this permissive.
+            try:
+                self._model = CosyVoice(model_source, **kwargs)
+            except TypeError:
+                try:
+                    self._model = CosyVoice(model_source)
+                except Exception as exc:
+                    self._last_init_error = f"CosyVoice model load failed ({model_id}): {exc}"
+                    self._set_status(state="error", detail=self._last_init_error, model_id=model_id)
+                    logger.exception("CosyVoice model load failed for model_id=%s", model_id)
+                    self._model = None
+                    self._model_id = None
+                    self._model_device = None
+                    return False
+            except Exception as exc:
+                self._last_init_error = f"CosyVoice model load failed ({model_id}): {exc}"
+                self._set_status(state="error", detail=self._last_init_error, model_id=model_id)
+                logger.exception("CosyVoice model load failed for model_id=%s", model_id)
+                self._model = None
+                self._model_id = None
+                self._model_device = None
+                return False
+
+            self._last_init_error = ""
+            self._model_id = model_id
+            self._model_device = resolved_device
+            self._set_status(state="ready", detail="Voice model ready.", model_id=model_id)
             return True
-
-        try:
-            from cosyvoice.cli.cosyvoice import CosyVoice  # type: ignore
-        except Exception:
-            self._model = None
-            self._model_id = None
-            return False
-
-        kwargs = {}
-        device = str(os.environ.get("COACH_COSYVOICE_DEVICE", "auto")).strip().lower()
-        if device in {"cpu", "cuda"}:
-            kwargs["device"] = device
-
-        # CosyVoice constructor signatures vary by release; keep this permissive.
-        try:
-            self._model = CosyVoice(model_id, **kwargs)
-        except TypeError:
-            self._model = CosyVoice(model_id)
-        self._model_id = model_id
-        return True
 
     def _convert_reference_to_wav(self, raw_bytes: bytes) -> Path:
         input_path = tempfile.NamedTemporaryFile(delete=False, suffix=".bin")
@@ -123,6 +308,38 @@ class CosyVoiceRuntime:
         finally:
             Path(input_path.name).unlink(missing_ok=True)
         return Path(output_path.name)
+
+    def _voice_library_samples_dir(self) -> Path:
+        root = str(os.environ.get("COACH_VOICE_LIBRARY_DIR") or "/app/data/coach_voice_library").strip()
+        return Path(root) / "clone samples"
+
+    def _load_builtin_reference_bytes(self, voice_id: str) -> bytes:
+        normalized = str(voice_id or "").strip().lower()
+        if not normalized:
+            raise RuntimeError("Built-in voice id is required")
+        cached = self._builtin_voice_cache.get(normalized)
+        if cached:
+            return cached
+
+        sample_dir = self._voice_library_samples_dir()
+        if not sample_dir.exists():
+            raise RuntimeError("Voice library samples directory is missing.")
+
+        matched_path: Optional[Path] = None
+        for file_path in sample_dir.iterdir():
+            if not file_path.is_file():
+                continue
+            lower_name = file_path.name.lower()
+            if f"[{normalized}]" in lower_name or normalized in lower_name:
+                matched_path = file_path
+                break
+        if matched_path is None:
+            raise RuntimeError(f"Built-in voice sample not found for: {normalized}")
+        payload = matched_path.read_bytes()
+        if not payload:
+            raise RuntimeError(f"Built-in voice sample is empty for: {normalized}")
+        self._builtin_voice_cache[normalized] = payload
+        return payload
 
     def _espeak_fallback(self, text: str, voice_preset: str) -> bytes:
         binary = shutil.which("espeak-ng") or shutil.which("espeak")
@@ -161,11 +378,13 @@ class CosyVoiceRuntime:
         voice_preset: str,
         model_id: Optional[str],
         reference_audio_bytes: Optional[bytes],
+        runtime_device: Optional[str] = None,
     ) -> bytes:
         clone_mode = voice_mode in {"cloned_profile", "cloned_session"}
-        if not self._init_model(model_id):
+        if not self._init_model(model_id, runtime_device):
             if clone_mode and reference_audio_bytes:
-                raise RuntimeError("CosyVoice clone model is unavailable in sidecar.")
+                detail = self._last_init_error or "CosyVoice clone model is unavailable in sidecar."
+                raise RuntimeError(detail)
             return self._espeak_fallback(text=text, voice_preset=voice_preset)
 
         reference_path: Optional[Path] = None
@@ -224,6 +443,17 @@ def health() -> dict:
     return {"ok": True, "service": "cosyvoice-sidecar"}
 
 
+@app.get("/status")
+def status(warm: bool = False, runtime_device: Optional[str] = None) -> dict[str, Any]:
+    model_id = str(os.environ.get("COACH_COSYVOICE_MODEL_ID") or "").strip() or "iic/CosyVoice-300M"
+    if warm:
+        runtime.ensure_warmup(model_id, runtime_device)
+    snapshot = runtime.status_snapshot(requested_model_id=model_id)
+    resolved_device = runtime._resolve_runtime_device(runtime_device)
+    snapshot["runtime_device"] = str(snapshot.get("runtime_device") or resolved_device)
+    return snapshot
+
+
 @app.post("/synthesize")
 def synthesize(payload: SynthesizeRequest):
     text = str(payload.text or "").strip()
@@ -235,6 +465,13 @@ def synthesize(payload: SynthesizeRequest):
         raise HTTPException(status_code=400, detail="Unsupported voice mode")
 
     reference_bytes = None
+    builtin_voice_id = str(payload.builtin_voice_id or "").strip().lower()
+    if builtin_voice_id:
+        try:
+            reference_bytes = runtime._load_builtin_reference_bytes(builtin_voice_id)
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+
     if payload.reference_audio_b64:
         try:
             reference_bytes = base64.b64decode(payload.reference_audio_b64)
@@ -248,6 +485,7 @@ def synthesize(payload: SynthesizeRequest):
             voice_preset=str(payload.voice_preset or "default"),
             model_id=payload.model_id,
             reference_audio_bytes=reference_bytes,
+            runtime_device=payload.runtime_device,
         )
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc

@@ -109,6 +109,78 @@ npm run build:coach:watch
 When building `bipod-app` via Docker, the coach bundle is now built automatically in the image (`docker/Dockerfile.app`).
 `docker-compose.yaml` intentionally does not bind-mount `./frontend` so container runs always use the prebuilt bundle from the image.
 
+## 🎙️ Coach Preload (Recommended)
+
+The first time you open `/coach`, Faster-Whisper and CosyVoice may download model assets.  
+To avoid first-run stalls, preload coach packages/models manually:
+
+```bash
+./scripts/preload-coach-models.sh
+```
+
+What this script does:
+
+- builds `bipod-app` and `cosyvoice` images (runtime packages ready)
+- starts `ollama` and `languagetool`
+- auto-selects runtime profile (`cpu`, `gpu_constrained`, `gpu_full`) from GPU VRAM (or `COACH_RUNTIME_PROFILE` override)
+- pulls and warms Ollama tutor model chain for the active profile
+- auto-detects GPU VRAM and picks ASR preload defaults:
+  - constrained profile (`< 16GB VRAM`): fast=`medium`, accurate=`large-v3`
+  - full GPU profile (`>= 16GB VRAM`): fast=`large-v3`, accurate=`large-v3`
+- downloads Faster-Whisper fast/accurate models to `data/huggingface/hub`
+- downloads required CosyVoice assets to `data/modelscope`
+- starts `bipod-app` + `cosyvoice` (plus `ollama` + `languagetool`)
+- warms CosyVoice status endpoint to reduce first-turn TTS delay
+- verifies LanguageTool readiness endpoint (`/v2/languages`)
+
+You can override the automatic picks:
+
+- `COACH_RUNTIME_PROFILE=cpu|gpu_constrained|gpu_full|auto`
+- `COACH_HIGH_VRAM_THRESHOLD_GB=16`
+- `COACH_WHISPER_FAST_MODEL=...`
+- `COACH_WHISPER_ACCURATE_MODEL=...`
+- `HEAVY_MODEL`, `SMART_MODEL`, `MEDIUM_MODEL`, `LIGHT_MODEL` (for Ollama pulls)
+
+Threshold guidance:
+
+- `COACH_HIGH_VRAM_THRESHOLD_GB` controls when `auto` switches to `gpu_full`.
+- Example: setting it to `6` means a 6GB GPU is treated as `gpu_full` (aggressive: ASR/TTS on CUDA).
+- For most 6-8GB cards, keep threshold at `16` or force `COACH_RUNTIME_PROFILE=gpu_constrained`.
+- Recommended for 6-8GB:
+
+```bash
+COACH_RUNTIME_PROFILE=auto COACH_HIGH_VRAM_THRESHOLD_GB=16 ./scripts/preload-coach-models.sh
+```
+
+Resume behavior:
+
+- Download steps are cached in `data/preload_cache/coach/done.steps`.
+- If the script is interrupted, rerun it and it will skip completed pull/download steps.
+- Set `COACH_PRELOAD_FORCE=1` to ignore cache markers and force all download steps again.
+
+## ⚡ Coach Runtime Preload (In-App)
+
+Coach now exposes runtime warmup endpoints so the UI can preheat models based on mode:
+
+- `POST /api/v1/coach/runtime/preload` with `{ "mode": "voice" | "text" | "idle" }`
+- `GET /api/v1/coach/runtime/status?warm=true&mode=voice`
+
+Current preload behavior:
+
+- `voice` mode warms Ollama + ASR (fast model) + TTS
+- `text` mode warms Ollama (and optional LanguageTool sidecar)
+- `idle` mode only reports status, no warmup
+
+Runtime status now returns an inferred coach profile (`cpu`, `gpu_constrained`, `gpu_full`) and the selected ASR/TTS device strategy so UI/services can stay predictable across hardware tiers.
+
+## 🌐 Coach Language Selection
+
+Coach setup now consumes backend-supported languages from:
+
+- `GET /api/v1/coach/languages/supported`
+
+Only selectable languages are shown in the setup screen, and the selected language is used for ASR hinting, coaching/corrections, and TTS output.
+
 ## 🧠 Required Models
 
 Bipod uses different Ollama models for each brain tier. Pull the models below into the `bipod_ollama` container before using those tiers.

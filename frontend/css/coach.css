@@ -223,6 +223,19 @@ body.coach-page {
   gap: 10px;
 }
 
+.coach-top {
+  display: grid;
+  gap: 6px;
+}
+
+.coach-top-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
 .coach-top h1 {
   margin: 8px 0 0;
   font-size: 1.52rem;
@@ -232,6 +245,91 @@ body.coach-page {
 .coach-top p {
   margin: 5px 0 0;
   color: var(--text-secondary);
+}
+
+.coach-runtime-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.coach-runtime-chip {
+  border: 1px solid rgba(139, 92, 246, 0.35);
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 0.72rem;
+  color: var(--text-secondary);
+  background: rgba(139, 92, 246, 0.08);
+}
+
+.coach-runtime-chip.ready {
+  border-color: rgba(34, 197, 94, 0.45);
+  color: #b7f7cb;
+  background: rgba(34, 197, 94, 0.15);
+}
+
+.coach-tts-badge {
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.03);
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  max-width: min(540px, 100%);
+  padding: 8px 12px;
+}
+
+.coach-tts-badge-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--text-dim);
+  box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.08);
+  flex-shrink: 0;
+}
+
+.coach-tts-badge-text {
+  min-width: 0;
+  display: grid;
+  gap: 1px;
+}
+
+.coach-tts-badge-text strong {
+  font-size: 0.83rem;
+  color: var(--text-main);
+}
+
+.coach-tts-badge-text span {
+  font-size: 0.76rem;
+  color: var(--text-secondary);
+  line-height: 1.25;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.coach-tts-badge.state-ready .coach-tts-badge-dot,
+.coach-tts-badge.ready .coach-tts-badge-dot {
+  background: #22c55e;
+  box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.2);
+}
+
+.coach-tts-badge.state-downloading .coach-tts-badge-dot,
+.coach-tts-badge.state-loading .coach-tts-badge-dot,
+.coach-tts-badge.state-warming .coach-tts-badge-dot {
+  background: #f59e0b;
+  box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.2);
+}
+
+.coach-tts-badge.state-error {
+  border-color: rgba(239, 68, 68, 0.45);
+  background: rgba(239, 68, 68, 0.12);
+}
+
+.coach-tts-badge.state-error .coach-tts-badge-dot {
+  background: #ef4444;
+  box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.2);
 }
 
 .coach-back-btn {
@@ -303,6 +401,48 @@ body.coach-page {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px 10px;
   align-items: center;
+}
+
+.coach-settings-shell {
+  display: grid;
+  gap: 9px;
+}
+
+.coach-settings-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.coach-settings-summary {
+  color: var(--text-secondary);
+  font-size: 0.84rem;
+}
+
+.coach-settings-summary strong {
+  color: var(--text-main);
+  font-weight: 650;
+}
+
+.coach-settings-toggle {
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text-secondary);
+  padding: 6px 10px;
+  font-size: 0.82rem;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.coach-settings-toggle:hover {
+  color: var(--text-main);
+  border-color: var(--border-hover);
+  background: var(--hover-bg);
 }
 
 .coach-inline-controls label {
@@ -409,7 +549,7 @@ body.coach-page {
 }
 
 .coach-thread {
-  height: clamp(320px, 50vh, 560px);
+  height: clamp(380px, 58vh, 700px);
   overflow: auto;
   padding: 12px;
   display: flex;
@@ -510,6 +650,33 @@ body.coach-page {
   color: #dccbff;
 }
 
+.coach-text-compose {
+  display: flex;
+  gap: 10px;
+  margin-top: 14px;
+  position: sticky;
+  bottom: 0;
+  padding-top: 10px;
+  background: linear-gradient(180deg, rgba(11, 12, 18, 0), rgba(11, 12, 18, 0.95) 28%);
+}
+
+.coach-text-compose input {
+  flex: 1;
+  min-width: 0;
+  border-radius: 10px;
+  border: 1px solid rgba(140, 102, 255, 0.28);
+  background: rgba(8, 11, 20, 0.92);
+  color: var(--text);
+  font: inherit;
+  padding: 10px 12px;
+}
+
+.coach-text-compose input:focus {
+  outline: none;
+  border-color: rgba(159, 127, 255, 0.8);
+  box-shadow: 0 0 0 2px rgba(140, 102, 255, 0.2);
+}
+
 .coach-controls {
   border: 1px solid var(--border-color);
   border-radius: var(--radius-md);
@@ -556,7 +723,7 @@ body.coach-page {
 }
 
 .coach-voice-stage {
-  min-height: clamp(320px, 50vh, 560px);
+  min-height: clamp(380px, 58vh, 700px);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-md);
   background:
@@ -571,14 +738,36 @@ body.coach-page {
 }
 
 .coach-voice-avatar-wrap {
-  width: 168px;
-  height: 168px;
+  width: 214px;
+  height: 214px;
   border-radius: 50%;
   padding: 6px;
   background: linear-gradient(135deg, rgba(138, 43, 226, 0.65), rgba(70, 158, 255, 0.45));
   box-shadow: 0 18px 48px rgba(138, 43, 226, 0.3);
   display: grid;
   place-items: center;
+  position: relative;
+  isolation: isolate;
+}
+
+.coach-voice-avatar-wrap::before,
+.coach-voice-avatar-wrap::after {
+  content: "";
+  position: absolute;
+  inset: -12px;
+  border-radius: 50%;
+  border: 1px solid rgba(138, 43, 226, 0.42);
+  opacity: 0;
+  transform: scale(0.9);
+  z-index: 0;
+}
+
+.coach-voice-avatar-wrap.is-speaking::before {
+  animation: coach-avatar-pulse 1.4s ease-out infinite;
+}
+
+.coach-voice-avatar-wrap.is-speaking::after {
+  animation: coach-avatar-pulse 1.4s ease-out infinite 0.45s;
 }
 
 .coach-voice-avatar-wrap img,
@@ -588,15 +777,85 @@ body.coach-page {
   border-radius: 50%;
   object-fit: cover;
   border: 2px solid rgba(255, 255, 255, 0.12);
+  position: relative;
+  z-index: 1;
 }
 
 .coach-voice-avatar-fallback {
   display: grid;
   place-items: center;
-  font-size: 3.5rem;
+  font-size: 4.1rem;
   font-weight: 800;
   color: #fff;
   background: radial-gradient(circle at 35% 25%, #6c87ff, #6d28d9 70%);
+}
+
+.coach-voice-wave {
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 4px;
+  min-height: 46px;
+  opacity: 0.65;
+}
+
+.coach-voice-wave span {
+  width: 5px;
+  height: 10px;
+  border-radius: 999px;
+  background: linear-gradient(180deg, #9f8dff, #5f8dff);
+  transform-origin: bottom center;
+  animation: coach-wave-idle 1.8s ease-in-out infinite;
+  animation-delay: calc(var(--bar-index) * 0.05s);
+}
+
+.coach-voice-wave.active span {
+  background: linear-gradient(180deg, #d6ccff, #7d9bff);
+  animation-name: coach-wave-speaking;
+  animation-duration: 1s;
+}
+
+@keyframes coach-avatar-pulse {
+  0% {
+    opacity: 0.55;
+    transform: scale(0.92);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.28);
+  }
+}
+
+@keyframes coach-wave-idle {
+  0%,
+  100% {
+    height: 10px;
+    opacity: 0.5;
+  }
+  50% {
+    height: 17px;
+    opacity: 0.85;
+  }
+}
+
+@keyframes coach-wave-speaking {
+  0%,
+  100% {
+    height: 10px;
+    opacity: 0.75;
+  }
+  25% {
+    height: 34px;
+    opacity: 1;
+  }
+  50% {
+    height: 17px;
+    opacity: 0.9;
+  }
+  75% {
+    height: 28px;
+    opacity: 1;
+  }
 }
 
 .coach-voice-stage-meta {
@@ -785,12 +1044,45 @@ body.coach-page {
     width: 100%;
   }
 
+  .coach-top-head {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .coach-tts-badge {
+    width: 100%;
+    border-radius: var(--radius-md);
+  }
+
+  .coach-tts-badge-text span {
+    white-space: normal;
+  }
+
   .coach-recording-text {
     font-size: 1rem;
   }
 
   .coach-inline-controls {
     grid-template-columns: 1fr;
+  }
+
+  .coach-settings-head {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .coach-settings-toggle {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .coach-voice-avatar-wrap {
+    width: 176px;
+    height: 176px;
+  }
+
+  .coach-voice-wave span {
+    width: 4px;
   }
 
   .coach-view-toggle {

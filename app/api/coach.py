@@ -10,7 +10,9 @@ from fastapi.responses import Response, StreamingResponse
 
 from app.api.schemas import (
     CoachBuiltinVoiceResponse,
+    CoachRuntimePreloadRequest,
     CoachSessionCreate,
+    CoachTextTurnRequest,
     CoachTtsRequest,
     CoachVoiceProfileCreate,
 )
@@ -212,6 +214,12 @@ async def progress_summary(user_id: int = Depends(auth_service.get_current_user)
     return await coach_service.progress_summary(user_id=user_id)
 
 
+@router.get("/languages/supported")
+async def supported_languages(user_id: int = Depends(auth_service.get_current_user)):
+    _ = user_id
+    return coach_service.supported_languages()
+
+
 async def _stream_turn_impl(
     *,
     session_id: str,
@@ -311,6 +319,26 @@ async def stream_turn(
     )
 
 
+@router.post("/turns/text")
+async def text_turn(
+    payload: CoachTextTurnRequest,
+    user_id: int = Depends(auth_service.get_current_user),
+):
+    session = await coach_service.get_session(str(payload.session_id), user_id)
+    if not session:
+        raise _session_not_found(str(payload.session_id))
+    try:
+        return await coach_service.process_text_turn(
+            user_id=user_id,
+            session_id=str(payload.session_id),
+            text=payload.text,
+            preferred_model=payload.preferred_model,
+            persona_style=payload.persona_style,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.post("/tts")
 async def synthesize_tts(
     payload: CoachTtsRequest,
@@ -342,6 +370,34 @@ async def synthesize_tts(
             "X-Coach-TTS": "coach",
         },
     )
+
+
+@router.get("/tts/status")
+async def tts_status(
+    warm: bool = False,
+    user_id: int = Depends(auth_service.get_current_user),
+):
+    _ = user_id
+    return await coach_service.get_tts_status(warm=warm)
+
+
+@router.get("/runtime/status")
+async def runtime_status(
+    warm: bool = False,
+    mode: Optional[str] = None,
+    user_id: int = Depends(auth_service.get_current_user),
+):
+    _ = user_id
+    return await coach_service.get_runtime_status(warm=warm, mode=mode)
+
+
+@router.post("/runtime/preload")
+async def runtime_preload(
+    payload: CoachRuntimePreloadRequest,
+    user_id: int = Depends(auth_service.get_current_user),
+):
+    _ = user_id
+    return await coach_service.preload_runtime(mode=payload.mode)
 
 
 @router.post("/voices/reference")
