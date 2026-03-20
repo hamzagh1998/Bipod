@@ -36,6 +36,51 @@ const LANGUAGE_OPTIONS = [
   "Greek",
 ];
 
+const LEARNER_LEVEL_OPTIONS = [
+  {
+    value: "ignorant",
+    label: "Ignorant (absolute beginner)",
+  },
+  {
+    value: "novice",
+    label: "Novice",
+  },
+  {
+    value: "medium",
+    label: "Medium",
+  },
+  {
+    value: "high",
+    label: "High",
+  },
+  {
+    value: "fluent",
+    label: "Fluent",
+  },
+];
+
+const LEARNER_LEVEL_ALIAS_MAP = {
+  a0: "ignorant",
+  beginner: "ignorant",
+  starter: "ignorant",
+  ignorant: "ignorant",
+  a1: "novice",
+  a2: "novice",
+  novice: "novice",
+  basic: "novice",
+  b1: "medium",
+  intermediate: "medium",
+  medium: "medium",
+  mid: "medium",
+  b2: "high",
+  high: "high",
+  advanced: "high",
+  c1: "fluent",
+  c2: "fluent",
+  fluent: "fluent",
+  proficient: "fluent",
+};
+
 const PERSONA_OPTIONS = [
   {
     id: "default_coach",
@@ -108,6 +153,12 @@ const SERVER_VOICE_OPTIONS = [
   { id: "server:default", label: "Local default" },
   { id: "server:female", label: "Local female" },
   { id: "server:male", label: "Local male" },
+];
+const TTS_PROVIDER_OPTIONS = [
+  { value: "auto", label: "Auto (runtime)" },
+  { value: "cosyvoice", label: "CosyVoice (quality clone)" },
+  { value: "openvoice", label: "OpenVoice (fast clone / CPU)" },
+  { value: "espeak", label: "Local espeak (fastest)" },
 ];
 
 const DEFAULT_SERVER_VOICE = SERVER_VOICE_OPTIONS[0].id;
@@ -271,9 +322,30 @@ function eventText(event) {
   ).trim();
 }
 
-function buildStarterQuestion(subject, language) {
+function normalizeLearnerLevel(value) {
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase();
+  if (!normalized) {
+    return "medium";
+  }
+  return LEARNER_LEVEL_ALIAS_MAP[normalized] || "medium";
+}
+
+function learnerLevelLabel(value) {
+  const normalized = normalizeLearnerLevel(value);
+  const option = LEARNER_LEVEL_OPTIONS.find((item) => item.value === normalized);
+  return option ? option.label : normalized;
+}
+
+function buildStarterQuestion(subject, language, nativeLanguage, learnerLevel) {
   const topic = String(subject || "this topic").trim();
   const lang = String(language || "English").trim();
+  const native = String(nativeLanguage || "").trim();
+  const level = normalizeLearnerLevel(learnerLevel);
+  if ((level === "ignorant" || level === "novice") && native) {
+    return `Great. Let's practice ${topic} in ${lang}. If needed, you can answer in ${native} and I'll help you convert it step by step into ${lang}. First question: what is one simple idea you want to express about ${topic}?`;
+  }
   return `Great. Let's practice ${topic} in ${lang}. First question: can you introduce your thoughts on ${topic} in 2-3 sentences?`;
 }
 
@@ -298,6 +370,10 @@ function normalizeTtsStatus(payload) {
     loadedModelId: String(source.loaded_model_id || ""),
     warmupActive: Boolean(source.warmup_active),
     updatedAt: source.updated_at ?? null,
+    plannedRuntimeDevice: String(source.planned_runtime_device || ""),
+    fallbackReason: String(source.fallback_reason || "").trim(),
+    allocationPolicy: String(source.allocation_policy || "").trim(),
+    allocationReason: String(source.allocation_reason || "").trim(),
   };
 }
 
@@ -337,13 +413,16 @@ function normalizeRuntimeStatus(payload) {
         component.state || (component.ready ? "ready" : "idle"),
       ).toLowerCase(),
       detail: String(component.detail || "").trim(),
+      provider: String(component.provider || ""),
       availableModels,
       selectedModel: String(component.selected_model || ""),
+      selectionReason: String(component.selection_reason || ""),
       modelId: String(component.model_id || ""),
       fastModelId: String(component.fast_model_id || ""),
       accurateModelId: String(component.accurate_model_id || ""),
       runtimeDevice: String(component.runtime_device || ""),
       plannedRuntimeDevice: String(component.planned_runtime_device || ""),
+      fallbackReason: String(component.fallback_reason || ""),
     };
   };
   return {
@@ -351,6 +430,20 @@ function normalizeRuntimeStatus(payload) {
     mode: String(source.mode || "idle"),
     ready: Boolean(source.ready),
     state: String(source.state || "idle"),
+    allocationPolicy: String(source.allocation_policy || ""),
+    allocationReason: String(source.allocation_reason || ""),
+    llmDevice: String(source.llm_device || ""),
+    ttsDevice: String(source.tts_device || ""),
+    vramSnapshot:
+      source.vram_snapshot && typeof source.vram_snapshot === "object"
+        ? {
+            gpuEnabled: Boolean(source.vram_snapshot.gpu_enabled),
+            gpuVramGb: toNumberOrNull(source.vram_snapshot.gpu_vram_gb),
+            highVramThresholdGb: toNumberOrNull(
+              source.vram_snapshot.high_vram_threshold_gb,
+            ),
+          }
+        : null,
     runtimeProfile: {
       name: String(rawProfile.name || ""),
       gpuEnabled: Boolean(rawProfile.gpu_enabled),
@@ -404,10 +497,25 @@ function mapStoredTurn(turn) {
     feedback: String(turn?.explanation || "").trim(),
     mistakes: normalizeMistakes(turn?.mistakes),
     score: typeof turn?.score === "number" ? turn.score : null,
+    modelId: String(turn?.model_id || "").trim(),
+    asrModel: String(turn?.asr_model || "").trim(),
     error: "",
     startedAt: turn?.created_at || null,
     endedAt: turn?.created_at || null,
   };
+}
+
+function latestTurnModel(turns) {
+  if (!Array.isArray(turns)) {
+    return "";
+  }
+  for (let index = turns.length - 1; index >= 0; index -= 1) {
+    const modelId = String(turns[index]?.modelId || "").trim();
+    if (modelId) {
+      return modelId;
+    }
+  }
+  return "";
 }
 
 function formatWhen(value) {
@@ -522,6 +630,8 @@ function CoachApp() {
   const [subjectChoice, setSubjectChoice] = useState(SUBJECT_OPTIONS[0]);
   const [customSubject, setCustomSubject] = useState("");
   const [languageChoice, setLanguageChoice] = useState("English");
+  const [nativeLanguageChoice, setNativeLanguageChoice] = useState("");
+  const [learnerLevelChoice, setLearnerLevelChoice] = useState("medium");
   const [supportedLanguages, setSupportedLanguages] = useState([]);
   const [personaChoice, setPersonaChoice] = useState(PERSONA_OPTIONS[0].id);
   const [voiceOptions, setVoiceOptions] = useState([]);
@@ -540,6 +650,8 @@ function CoachApp() {
   const [sessionId, setSessionId] = useState("");
   const [activeSubject, setActiveSubject] = useState("");
   const [activeLanguage, setActiveLanguage] = useState("English");
+  const [activeNativeLanguage, setActiveNativeLanguage] = useState("");
+  const [activeLearnerLevel, setActiveLearnerLevel] = useState("medium");
   const [activePersonaId, setActivePersonaId] = useState(PERSONA_OPTIONS[0].id);
   const [activeSessionStatus, setActiveSessionStatus] = useState("active");
   const [starterQuestion, setStarterQuestion] = useState("");
@@ -572,6 +684,9 @@ function CoachApp() {
   );
   const [preferredModel, setPreferredModel] = useState("auto");
   const [preferredAsrModel, setPreferredAsrModel] = useState("auto");
+  const [preferredTtsProvider, setPreferredTtsProvider] = useState("auto");
+  const [lastUsedLlmModel, setLastUsedLlmModel] = useState("");
+  const [lastUsedAsrModel, setLastUsedAsrModel] = useState("");
 
   const mediaRecorderRef = useRef(null);
   const mediaStreamRef = useRef(null);
@@ -581,11 +696,16 @@ function CoachApp() {
   const isStoppingRef = useRef(false);
   const currentTurnRef = useRef(null);
   const streamAbortRef = useRef(null);
+  const sendTurnLockRef = useRef(false);
   const threadRef = useRef(null);
   const activeLanguageRef = useRef("English");
   const autoSpeakRepliesRef = useRef(true);
   const audioPlaybackRef = useRef(null);
   const starterPlaybackKeyRef = useRef("");
+  const ttsRequestAbortRef = useRef(null);
+  const ttsRequestSeqRef = useRef(0);
+  const ttsInFlightRef = useRef(false);
+  const pendingTtsTextRef = useRef("");
 
   const selectedSubject = useMemo(() => {
     if (subjectChoice !== "Custom") {
@@ -619,6 +739,7 @@ function CoachApp() {
     const profile = runtimeStatus.runtimeProfile || {};
     const llm = runtimeStatus.components?.llm || {};
     const asr = runtimeStatus.components?.asr || {};
+    const tts = runtimeStatus.components?.tts || {};
     const profileName = String(profile.name || "auto").trim() || "auto";
     const llmModel =
       String(
@@ -628,6 +749,11 @@ function CoachApp() {
       String(
         asr.fastModelId || asr.modelId || profile.asrFastModel || "unknown",
       ).trim() || "unknown";
+    const selectedLlmModel =
+      String(preferredModel !== "auto" ? preferredModel : llmModel).trim() ||
+      llmModel;
+    const latestLlmModel = String(lastUsedLlmModel || "").trim();
+    const activeAsrModel = String(lastUsedAsrModel || asrModel).trim() || asrModel;
     const asrDevice =
       String(
         asr.runtimeDevice ||
@@ -635,6 +761,15 @@ function CoachApp() {
           profile.asrDevice ||
           "unknown",
       ).trim() || "unknown";
+    const ttsDevice =
+      String(
+        tts.runtimeDevice ||
+          tts.plannedRuntimeDevice ||
+          runtimeStatus.ttsDevice ||
+          profile.ttsDevice ||
+          "unknown",
+      ).trim() || "unknown";
+    const ttsProvider = String(tts.provider || ttsStatus.provider || "unknown").trim() || "unknown";
     const gpuEnabled = Boolean(profile.gpuEnabled);
     const gpuVramGb =
       typeof profile.gpuVramGb === "number" ? profile.gpuVramGb : null;
@@ -647,10 +782,36 @@ function CoachApp() {
       profileName,
       hardwareLabel,
       llmModel,
+      selectedLlmModel,
+      latestLlmModel,
       asrModel,
+      activeAsrModel,
       asrDevice,
+      ttsDevice,
+      ttsProvider,
+      allocationPolicy:
+        String(runtimeStatus.allocationPolicy || profile.allocationPolicy || "")
+          .trim() || "auto_balance",
+      allocationReason: String(runtimeStatus.allocationReason || "").trim(),
     };
-  }, [runtimeStatus]);
+  }, [
+    runtimeStatus,
+    preferredModel,
+    lastUsedLlmModel,
+    lastUsedAsrModel,
+    ttsStatus.provider,
+  ]);
+  const selectedTtsProvider = useMemo(() => {
+    const explicit = String(preferredTtsProvider || "").trim().toLowerCase();
+    if (explicit && explicit !== "auto") {
+      return explicit;
+    }
+    const runtimeProvider = String(runtimeSelection.ttsProvider || "").trim().toLowerCase();
+    if (runtimeProvider) {
+      return runtimeProvider;
+    }
+    return "cosyvoice";
+  }, [preferredTtsProvider, runtimeSelection.ttsProvider]);
   const llmModelOptions = useMemo(() => {
     const seen = new Set();
     const ordered = [];
@@ -740,6 +901,38 @@ function CoachApp() {
     )
       .trim()
       .toLowerCase();
+    const allocationReason = String(runtimeStatus.allocationReason || "").trim();
+    const allocationPolicy =
+      String(runtimeStatus.allocationPolicy || profile.allocationPolicy || "")
+        .trim()
+        .toLowerCase();
+    const ttsFallbackReason = String(
+      runtimeStatus.components?.tts?.fallbackReason ||
+        ttsStatus.fallbackReason ||
+        "",
+    )
+      .trim()
+      .toLowerCase();
+
+    if (allocationReason === "manual_llm_pin") {
+      warnings.push(
+        "Pinned LLM is using most VRAM, so TTS is running on CPU for stability.",
+      );
+    } else if (allocationReason === "insufficient_vram") {
+      warnings.push(
+        "Current GPU VRAM is insufficient for running both selected LLM and GPU TTS together.",
+      );
+    }
+    if (ttsFallbackReason === "cuda_unavailable") {
+      warnings.push(
+        "GPU TTS is unavailable in the current TTS runtime, so TTS is on CPU.",
+      );
+    }
+    if (allocationPolicy === "prioritize_llm") {
+      warnings.push("Runtime policy prioritizes LLM quality over TTS speed.");
+    } else if (allocationPolicy === "prioritize_tts") {
+      warnings.push("Runtime policy prioritizes TTS speed over LLM GPU usage.");
+    }
 
     if (
       selectedLlm &&
@@ -773,6 +966,7 @@ function CoachApp() {
     preferredAsrModel,
     runtimeStatus,
     runtimeSelection.llmModel,
+    ttsStatus.fallbackReason,
   ]);
 
   const voiceStageSnapshot = useMemo(() => {
@@ -902,7 +1096,7 @@ function CoachApp() {
       window.clearInterval(intervalId);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [authState, token, sessionId, viewMode]);
+  }, [authState, token, sessionId, viewMode, preferredModel, preferredTtsProvider]);
 
   useEffect(() => {
     if (!sessionId || !token || authState !== "ready") {
@@ -921,6 +1115,19 @@ function CoachApp() {
     }
     setPreferredModel("auto");
   }, [preferredModel, llmModelOptions]);
+
+  useEffect(() => {
+    const normalized = String(preferredTtsProvider || "").trim().toLowerCase();
+    if (
+      normalized === "auto" ||
+      normalized === "cosyvoice" ||
+      normalized === "openvoice" ||
+      normalized === "espeak"
+    ) {
+      return;
+    }
+    setPreferredTtsProvider("auto");
+  }, [preferredTtsProvider]);
 
   useEffect(() => {
     activeLanguageRef.current = activeLanguage || languageChoice || "English";
@@ -1028,19 +1235,33 @@ function CoachApp() {
   useEffect(() => {
     return () => {
       stopRecording(true);
-      if (streamAbortRef.current) {
-        streamAbortRef.current.abort();
-      }
-      if (audioPlaybackRef.current) {
-        audioPlaybackRef.current.pause();
-        audioPlaybackRef.current = null;
-      }
-      if (window.speechSynthesis) {
-        window.speechSynthesis.cancel();
-      }
+      abortActiveTurnRequest();
+      stopCurrentPlayback({ cancelRequest: true });
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  function isAbortError(error) {
+    if (!error) {
+      return false;
+    }
+    if (String(error?.name || "") === "AbortError") {
+      return true;
+    }
+    return /aborted/i.test(String(error?.message || ""));
+  }
+
+  function abortActiveTurnRequest() {
+    if (streamAbortRef.current) {
+      try {
+        streamAbortRef.current.abort();
+      } catch {
+        // Ignore abort races.
+      }
+      streamAbortRef.current = null;
+    }
+    sendTurnLockRef.current = false;
+  }
 
   useEffect(() => {
     function keyDown(event) {
@@ -1198,19 +1419,33 @@ function CoachApp() {
     if (!token) {
       return null;
     }
-    const path = warm
-      ? "/api/v1/coach/tts/status?warm=true"
-      : "/api/v1/coach/tts/status";
+    const query = new URLSearchParams();
+    if (warm) {
+      query.set("warm", "true");
+    }
+    if (preferredModel && preferredModel !== "auto") {
+      query.set("preferred_model", preferredModel);
+    }
+    if (preferredTtsProvider && preferredTtsProvider !== "auto") {
+      query.set("preferred_tts_provider", preferredTtsProvider);
+    }
+    const path = `/api/v1/coach/tts/status${query.toString() ? `?${query.toString()}` : ""}`;
     try {
       const payload = await apiFetchJson(path, token);
       const normalized = normalizeTtsStatus(payload);
       setTtsStatus(normalized);
       return normalized;
     } catch (error) {
+      const fallbackProvider =
+        String(
+          preferredTtsProvider && preferredTtsProvider !== "auto"
+            ? preferredTtsProvider
+            : "cosyvoice",
+        ).trim() || "cosyvoice";
       const fallback = normalizeTtsStatus({
         ok: false,
-        engine: "cosyvoice",
-        provider: "cosyvoice",
+        engine: fallbackProvider,
+        provider: fallbackProvider,
         ready: false,
         state: "error",
         detail: error?.message || "Voice status is unavailable.",
@@ -1237,6 +1472,12 @@ function CoachApp() {
     }
     if (mode) {
       query.set("mode", mode);
+    }
+    if (preferredModel && preferredModel !== "auto") {
+      query.set("preferred_model", preferredModel);
+    }
+    if (preferredTtsProvider && preferredTtsProvider !== "auto") {
+      query.set("preferred_tts_provider", preferredTtsProvider);
     }
     const path = `/api/v1/coach/runtime/status${query.toString() ? `?${query.toString()}` : ""}`;
     try {
@@ -1282,12 +1523,18 @@ function CoachApp() {
       "Conversation";
     const language =
       String(record?.target_language || "English").trim() || "English";
+    const nativeLanguage = String(record?.native_language || "").trim();
+    const learnerLevel = normalizeLearnerLevel(record?.cefr_level || "medium");
     const status = String(record?.status || "active").trim() || "active";
     const linkedModelId = String(record?.model_id || "").trim();
 
     setSessionId(String(record?.id || ""));
     setActiveSubject(subject);
     setActiveLanguage(language);
+    setActiveNativeLanguage(nativeLanguage);
+    setActiveLearnerLevel(learnerLevel);
+    setNativeLanguageChoice(nativeLanguage);
+    setLearnerLevelChoice(learnerLevel);
     setActivePersonaId(personaChoice);
     setActiveSessionStatus(status);
     const linkedProfileId = String(record?.voice_profile_id || "").trim();
@@ -1300,17 +1547,23 @@ function CoachApp() {
     }
     setPreferredModel(linkedModelId || "auto");
     setPreferredAsrModel("auto");
+    setPreferredTtsProvider("auto");
     setConversationEnded(status === "completed");
     setShowSessionSettings(false);
-    setStarterQuestion(buildStarterQuestion(subject, language));
+    setStarterQuestion(
+      buildStarterQuestion(subject, language, nativeLanguage, learnerLevel),
+    );
     starterPlaybackKeyRef.current = "";
     setSummary(null);
     setCurrentTurn(null);
     currentTurnRef.current = null;
-    setTurns(Array.isArray(loadedTurns) ? loadedTurns : []);
+    const normalizedTurns = Array.isArray(loadedTurns) ? loadedTurns : [];
+    setTurns(normalizedTurns);
+    setLastUsedLlmModel(latestTurnModel(normalizedTurns) || linkedModelId || "");
+    setLastUsedAsrModel("");
     setVoiceStage({
       speaker: "ai",
-      text: buildStarterQuestion(subject, language),
+      text: buildStarterQuestion(subject, language, nativeLanguage, learnerLevel),
       status: "idle",
     });
     setStatusMessage(
@@ -1326,6 +1579,7 @@ function CoachApp() {
     }
 
     setErrorMessage("");
+    abortActiveTurnRequest();
     setIsSending(false);
     stopRecording(true);
 
@@ -1469,7 +1723,23 @@ function CoachApp() {
     }
   }
 
-  function stopCurrentPlayback() {
+  function abortPendingTtsRequest() {
+    if (ttsRequestAbortRef.current) {
+      try {
+        ttsRequestAbortRef.current.abort();
+      } catch {
+        // Ignore abort races.
+      }
+      ttsRequestAbortRef.current = null;
+    }
+    ttsInFlightRef.current = false;
+    pendingTtsTextRef.current = "";
+  }
+
+  function stopCurrentPlayback(options = {}) {
+    if (Boolean(options?.cancelRequest)) {
+      abortPendingTtsRequest();
+    }
     if (window.speechSynthesis) {
       window.speechSynthesis.cancel();
     }
@@ -1487,6 +1757,11 @@ function CoachApp() {
     if (!content) {
       return false;
     }
+    const requestSeq = ttsRequestSeqRef.current + 1;
+    ttsRequestSeqRef.current = requestSeq;
+    const controller = new AbortController();
+    ttsRequestAbortRef.current = controller;
+    ttsInFlightRef.current = true;
 
     const parsedVoice = parseVoiceChoice(voiceChoice);
     const voicePreset = parsedVoice.voicePreset || "default";
@@ -1504,7 +1779,8 @@ function CoachApp() {
       language,
       voice_preset: voicePreset,
       persona_style: persona,
-      tts_provider: "cosyvoice",
+      tts_provider: preferredTtsProvider !== "auto" ? selectedTtsProvider : null,
+      preferred_model: preferredModel !== "auto" ? preferredModel : null,
       voice_mode: parsedVoice.voiceMode,
       voice_profile_id: parsedVoice.voiceProfileId || null,
       reference_clip_id:
@@ -1514,69 +1790,101 @@ function CoachApp() {
       builtin_voice_id: parsedVoice.builtinVoiceId || null,
     };
 
-    const response = await fetch("/api/v1/coach/tts", {
-      method: "POST",
-      headers: buildAuthHeaders(token, { "Content-Type": "application/json" }),
-      body: JSON.stringify(payload),
-    });
-    if (!response.ok) {
-      void refreshTtsStatus({ warm: true, silent: true });
-      const raw = await response.text().catch(() => "");
-      let detail = raw || `TTS failed (${response.status})`;
-      if (raw) {
-        try {
-          const parsed = JSON.parse(raw);
-          if (
-            parsed &&
-            typeof parsed === "object" &&
-            typeof parsed.detail === "string" &&
-            parsed.detail.trim()
-          ) {
-            detail = parsed.detail.trim();
+    try {
+      const response = await fetch("/api/v1/coach/tts", {
+        method: "POST",
+        headers: buildAuthHeaders(token, { "Content-Type": "application/json" }),
+        body: JSON.stringify(payload),
+        signal: controller.signal,
+      });
+      if (!response.ok) {
+        void refreshTtsStatus({ warm: true, silent: true });
+        const raw = await response.text().catch(() => "");
+        let detail = raw || `TTS failed (${response.status})`;
+        if (raw) {
+          try {
+            const parsed = JSON.parse(raw);
+            if (
+              parsed &&
+              typeof parsed === "object" &&
+              typeof parsed.detail === "string" &&
+              parsed.detail.trim()
+            ) {
+              detail = parsed.detail.trim();
+            }
+          } catch {
+            // keep raw response
           }
-        } catch {
-          // keep raw response
         }
+        throw new Error(detail);
       }
-      throw new Error(detail);
-    }
 
-    const audioBlob = await response.blob();
-    if (!audioBlob.size) {
-      throw new Error("TTS returned empty audio");
-    }
+      const audioBlob = await response.blob();
+      if (requestSeq !== ttsRequestSeqRef.current) {
+        return false;
+      }
+      if (!audioBlob.size) {
+        throw new Error("TTS returned empty audio");
+      }
 
-    stopCurrentPlayback();
-    setVoiceStage({
-      speaker: "ai",
-      text: content,
-      status: "speaking",
-    });
-    const audioUrl = window.URL.createObjectURL(audioBlob);
-    const player = new Audio(audioUrl);
-    audioPlaybackRef.current = player;
-    player.onended = () => {
-      if (audioPlaybackRef.current === player) {
-        audioPlaybackRef.current = null;
+      stopCurrentPlayback();
+      setVoiceStage({
+        speaker: "ai",
+        text: content,
+        status: "speaking",
+      });
+      const audioUrl = window.URL.createObjectURL(audioBlob);
+      const player = new Audio(audioUrl);
+      audioPlaybackRef.current = player;
+      player.onended = () => {
+        if (audioPlaybackRef.current === player) {
+          audioPlaybackRef.current = null;
+        }
+        setVoiceStage((current) => ({ ...current, status: "idle" }));
+        window.URL.revokeObjectURL(audioUrl);
+      };
+      player.onerror = () => {
+        if (audioPlaybackRef.current === player) {
+          audioPlaybackRef.current = null;
+        }
+        setVoiceStage((current) => ({ ...current, status: "idle" }));
+        window.URL.revokeObjectURL(audioUrl);
+      };
+      await player.play();
+      return true;
+    } catch (error) {
+      if (isAbortError(error)) {
+        return false;
       }
-      setVoiceStage((current) => ({ ...current, status: "idle" }));
-      window.URL.revokeObjectURL(audioUrl);
-    };
-    player.onerror = () => {
-      if (audioPlaybackRef.current === player) {
-        audioPlaybackRef.current = null;
+      throw error;
+    } finally {
+      ttsInFlightRef.current = false;
+      if (ttsRequestAbortRef.current === controller) {
+        ttsRequestAbortRef.current = null;
       }
-      setVoiceStage((current) => ({ ...current, status: "idle" }));
-      window.URL.revokeObjectURL(audioUrl);
-    };
-    await player.play();
-    return true;
+      const pendingText = String(pendingTtsTextRef.current || "").trim();
+      if (pendingText && pendingText !== content) {
+        pendingTtsTextRef.current = "";
+        window.setTimeout(() => {
+          void speakCoachText(pendingText, { force: true });
+        }, 0);
+      }
+    }
   }
 
   async function speakCoachText(text, options = {}) {
     const content = String(text || "").trim();
     const forcePlay = Boolean(options?.force);
     if (!content || (!forcePlay && !autoSpeakRepliesRef.current)) {
+      return;
+    }
+    if (ttsInFlightRef.current) {
+      pendingTtsTextRef.current = content;
+      setVoiceStage({
+        speaker: "ai",
+        text: content,
+        status: "processing",
+      });
       return;
     }
     setVoiceStage({
@@ -1693,7 +2001,8 @@ function CoachApp() {
         body: JSON.stringify({
           title: `${selectedSubject} conversation`,
           target_language: languageChoice,
-          cefr_level: "B1",
+          native_language: nativeLanguageChoice || null,
+          cefr_level: learnerLevelChoice,
           focus_area: selectedSubject,
           model_id: preferredModel !== "auto" ? preferredModel : null,
           voice_profile_id: linkedProfileId,
@@ -1731,6 +2040,8 @@ function CoachApp() {
       feedback: "",
       mistakes: [],
       score: null,
+      modelId: "",
+      asrModel: "",
       error: "",
       startedAt: new Date().toISOString(),
       endedAt: null,
@@ -1838,10 +2149,16 @@ function CoachApp() {
   }
 
   async function sendAudioTurn(audioBlob) {
-    if (!sessionId || !token || !currentTurnRef.current) {
+    if (
+      !sessionId ||
+      !token ||
+      !currentTurnRef.current ||
+      sendTurnLockRef.current
+    ) {
       return;
     }
 
+    sendTurnLockRef.current = true;
     setIsSending(true);
     setStatusMessage("AI is reviewing your answer...");
 
@@ -1934,14 +2251,21 @@ function CoachApp() {
             const confidenceBand = String(
               event?.asr_confidence_band || "",
             ).toLowerCase();
+            const asrModel = String(event?.asr_model || "").trim();
             updateDraft((draft) => {
               draft.transcript = finalText || draft.transcript;
               draft.partialTranscript = "";
               if (confidenceBand) {
                 draft.asrConfidenceBand = confidenceBand;
               }
+              if (asrModel) {
+                draft.asrModel = asrModel;
+              }
               return draft;
             });
+            if (asrModel) {
+              setLastUsedAsrModel(asrModel);
+            }
             if (finalText) {
               setVoiceStage({
                 speaker: "user",
@@ -1986,18 +2310,28 @@ function CoachApp() {
           }
 
           if (eventType === "score") {
+            const modelId = String(event?.model_id || "").trim();
             updateDraft((draft) => {
               const rawValue = event?.value;
               if (rawValue == null || rawValue === "") {
                 draft.score = null;
+                if (modelId) {
+                  draft.modelId = modelId;
+                }
                 return draft;
               }
               const valueRaw = Number(rawValue);
               draft.score = Number.isNaN(valueRaw)
                 ? null
                 : Math.max(0, Math.min(100, valueRaw));
+              if (modelId) {
+                draft.modelId = modelId;
+              }
               return draft;
             });
+            if (modelId) {
+              setLastUsedLlmModel(modelId);
+            }
             continue;
           }
 
@@ -2021,6 +2355,12 @@ function CoachApp() {
         endedAt: new Date().toISOString(),
       };
       setTurns((prev) => [...prev, finalTurn]);
+      if (finalTurn?.modelId) {
+        setLastUsedLlmModel(String(finalTurn.modelId));
+      }
+      if (finalTurn?.asrModel) {
+        setLastUsedAsrModel(String(finalTurn.asrModel));
+      }
       setCurrentTurn(null);
       currentTurnRef.current = null;
 
@@ -2042,6 +2382,11 @@ function CoachApp() {
         }
       }
     } catch (error) {
+      if (isAbortError(error)) {
+        setCurrentTurn(null);
+        currentTurnRef.current = null;
+        return;
+      }
       updateDraft((draft) => {
         draft.error = error?.message || "Failed to process this answer.";
         return draft;
@@ -2062,22 +2407,35 @@ function CoachApp() {
       });
     } finally {
       setIsSending(false);
+      sendTurnLockRef.current = false;
       streamAbortRef.current = null;
       refreshSessions();
     }
   }
 
   async function sendTextTurn() {
-    if (!sessionId || !token || isSending || isEnding || conversationEnded) {
+    if (
+      !sessionId ||
+      !token ||
+      isSending ||
+      isEnding ||
+      conversationEnded ||
+      sendTurnLockRef.current
+    ) {
       return;
     }
     const message = String(textDraft || "").trim();
     if (!message) {
       return;
     }
+    sendTurnLockRef.current = true;
     setErrorMessage("");
     setIsSending(true);
+    setTextDraft("");
     setStatusMessage("AI is reviewing your text...");
+
+    const controller = new AbortController();
+    streamAbortRef.current = controller;
 
     const draft = {
       id: makeId("text"),
@@ -2089,6 +2447,8 @@ function CoachApp() {
       feedback: "",
       mistakes: [],
       score: null,
+      modelId: "",
+      asrModel: "",
       error: "",
       startedAt: new Date().toISOString(),
       endedAt: null,
@@ -2100,6 +2460,7 @@ function CoachApp() {
       const payload = await apiFetchJson("/api/v1/coach/turns/text", token, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        signal: controller.signal,
         body: JSON.stringify({
           session_id: sessionId,
           text: message,
@@ -2112,10 +2473,13 @@ function CoachApp() {
       mappedTurn.id = String(payload?.id || draft.id);
       mappedTurn.transcript = message;
       mappedTurn.endedAt = new Date().toISOString();
+      mappedTurn.modelId = String(payload?.model_id || mappedTurn.modelId || "").trim();
       setTurns((prev) => [...prev, mappedTurn]);
+      if (mappedTurn.modelId) {
+        setLastUsedLlmModel(mappedTurn.modelId);
+      }
       setCurrentTurn(null);
       currentTurnRef.current = null;
-      setTextDraft("");
       setStatusMessage("Your turn. Answer the next question.");
       if (mappedTurn.reply) {
         setVoiceStage({
@@ -2126,6 +2490,14 @@ function CoachApp() {
         void speakCoachText(mappedTurn.reply);
       }
     } catch (error) {
+      if (isAbortError(error)) {
+        setCurrentTurn(null);
+        currentTurnRef.current = null;
+        return;
+      }
+      setTextDraft((current) =>
+        String(current || "").trim() ? current : message,
+      );
       updateDraft((next) => {
         next.error = error?.message || "Failed to process this text turn.";
         return next;
@@ -2146,6 +2518,8 @@ function CoachApp() {
       });
     } finally {
       setIsSending(false);
+      sendTurnLockRef.current = false;
+      streamAbortRef.current = null;
       refreshSessions();
     }
   }
@@ -2196,11 +2570,14 @@ function CoachApp() {
   }
 
   function startAnotherConversation() {
+    abortActiveTurnRequest();
     stopRecording(true);
     starterPlaybackKeyRef.current = "";
     setSessionId("");
     setActiveSubject("");
     setActiveLanguage(languageChoice || "English");
+    setActiveNativeLanguage(nativeLanguageChoice || "");
+    setActiveLearnerLevel(normalizeLearnerLevel(learnerLevelChoice));
     setActivePersonaId(personaChoice);
     setActiveSessionStatus("active");
     setStarterQuestion("");
@@ -2217,6 +2594,9 @@ function CoachApp() {
     setProfileDraftName(DEFAULT_PROFILE_NAME);
     setPreferredModel("auto");
     setPreferredAsrModel("auto");
+    setPreferredTtsProvider("auto");
+    setLastUsedLlmModel("");
+    setLastUsedAsrModel("");
     setVoiceChoice((current) => {
       const builtinIds = new Set(
         builtinVoices.map((voice) =>
@@ -2382,11 +2762,27 @@ function CoachApp() {
               {runtimeSelection.hardwareLabel})
             </span>
             <span>
-              <strong>LLM:</strong> {runtimeSelection.llmModel}
+              <strong>LLM:</strong> {runtimeSelection.selectedLlmModel}
+              {runtimeSelection.latestLlmModel &&
+              runtimeSelection.latestLlmModel !==
+                runtimeSelection.selectedLlmModel
+                ? ` (last turn: ${runtimeSelection.latestLlmModel})`
+                : ""}
             </span>
             <span>
-              <strong>ASR:</strong> {runtimeSelection.asrModel} on{" "}
+              <strong>ASR:</strong> {runtimeSelection.activeAsrModel} on{" "}
               {runtimeSelection.asrDevice}
+            </span>
+            <span>
+              <strong>TTS:</strong>{" "}
+              {runtimeSelection.ttsProvider} on{" "}
+              {runtimeSelection.ttsDevice || ttsStatus.plannedRuntimeDevice || "unknown"}
+            </span>
+            <span>
+              <strong>Policy:</strong> {runtimeSelection.allocationPolicy}
+              {runtimeSelection.allocationReason
+                ? ` (${runtimeSelection.allocationReason})`
+                : ""}
             </span>
           </div>
         </div>
@@ -2433,6 +2829,40 @@ function CoachApp() {
               ))}
             </select>
 
+            <label htmlFor="native-language-select">
+              Native language (optional)
+            </label>
+            <select
+              id="native-language-select"
+              value={nativeLanguageChoice}
+              onChange={(event) => setNativeLanguageChoice(event.target.value)}
+            >
+              <option value="">Prefer target-language-only coaching</option>
+              {(supportedLanguages.length
+                ? supportedLanguages.map((item) => String(item.name || ""))
+                : LANGUAGE_OPTIONS
+              ).map((language) => (
+                <option key={`native-${language}`} value={language}>
+                  {language}
+                </option>
+              ))}
+            </select>
+
+            <label htmlFor="learner-level-select">Current level</label>
+            <select
+              id="learner-level-select"
+              value={learnerLevelChoice}
+              onChange={(event) =>
+                setLearnerLevelChoice(normalizeLearnerLevel(event.target.value))
+              }
+            >
+              {LEARNER_LEVEL_OPTIONS.map((level) => (
+                <option key={level.value} value={level.value}>
+                  {level.label}
+                </option>
+              ))}
+            </select>
+
             <label htmlFor="persona-select">AI personality</label>
             <select
               id="persona-select"
@@ -2469,6 +2899,21 @@ function CoachApp() {
               {asrPreferenceOptions.map((option) => (
                 <option key={option.value} value={option.value}>
                   {option.label}
+                </option>
+              ))}
+            </select>
+
+            <label htmlFor="tts-provider-select">TTS engine</label>
+            <select
+              id="tts-provider-select"
+              value={preferredTtsProvider}
+              onChange={(event) => setPreferredTtsProvider(event.target.value)}
+            >
+              {TTS_PROVIDER_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.value === "auto"
+                    ? `${option.label} (${runtimeSelection.ttsProvider})`
+                    : option.label}
                 </option>
               ))}
             </select>
@@ -2608,6 +3053,14 @@ function CoachApp() {
               <div className="coach-chip">
                 Language locked: {activeLanguage}
               </div>
+              {activeNativeLanguage ? (
+                <div className="coach-chip">
+                  Native: {activeNativeLanguage}
+                </div>
+              ) : null}
+              <div className="coach-chip">
+                Level: {learnerLevelLabel(activeLearnerLevel)}
+              </div>
               <div className="coach-chip">{username}</div>
               <div className="coach-chip">Turns: {turns.length}</div>
               <div className="coach-chip">Status: {activeSessionStatus}</div>
@@ -2620,7 +3073,8 @@ function CoachApp() {
                   Persona: <strong>{activePersona.label}</strong> · Voice:{" "}
                   <strong>
                     {selectedBuiltinVoice?.name || "Selected voice"}
-                  </strong>
+                  </strong>{" "}
+                  · TTS: <strong>{preferredTtsProvider === "auto" ? runtimeSelection.ttsProvider : selectedTtsProvider}</strong>
                 </div>
                 <button
                   type="button"
@@ -2685,6 +3139,23 @@ function CoachApp() {
                     {asrPreferenceOptions.map((option) => (
                       <option key={option.value} value={option.value}>
                         {option.label}
+                      </option>
+                    ))}
+                  </select>
+
+                  <label htmlFor="session-tts-provider-select">TTS engine</label>
+                  <select
+                    id="session-tts-provider-select"
+                    value={preferredTtsProvider}
+                    onChange={(event) =>
+                      setPreferredTtsProvider(event.target.value)
+                    }
+                  >
+                    {TTS_PROVIDER_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.value === "auto"
+                          ? `${option.label} (${runtimeSelection.ttsProvider})`
+                          : option.label}
                       </option>
                     ))}
                   </select>
@@ -2863,7 +3334,11 @@ function CoachApp() {
                       value={textDraft}
                       onChange={(event) => setTextDraft(event.target.value)}
                       onKeyDown={(event) => {
-                        if (event.key === "Enter" && !event.shiftKey) {
+                        if (
+                          event.key === "Enter" &&
+                          !event.shiftKey &&
+                          !event.repeat
+                        ) {
                           event.preventDefault();
                           void sendTextTurn();
                         }

@@ -208,6 +208,7 @@ class CoachTtsRequest(BaseModel):
     voice_preset: Optional[str] = Field(default="default", max_length=40)
     persona_style: Optional[str] = Field(default=None, max_length=2000)
     tts_provider: Optional[str] = Field(default=None, max_length=40)
+    preferred_model: Optional[str] = Field(default=None, min_length=1, max_length=120)
     voice_mode: Optional[Literal["preset", "cloned_profile", "cloned_session"]] = Field(default="preset")
     voice_profile_id: Optional[str] = Field(default=None, max_length=120)
     reference_clip_id: Optional[str] = Field(default=None, max_length=120)

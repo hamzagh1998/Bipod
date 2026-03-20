@@ -1,6 +1,8 @@
 import asyncio
+import ast
 import base64
 from collections import Counter
+from difflib import SequenceMatcher
 import hashlib
 import json
 import mimetypes
@@ -85,6 +87,7 @@ class CoachService:
         "goku": "Goku",
         "gute": "Gute",
     }
+    BUILTIN_CLONE_SAFE_LANGUAGE_CODES = {"en"}
     CODE_TO_LANGUAGE_NAME = {
         "ar": "Arabic",
         "de": "German",
@@ -110,6 +113,29 @@ class CoachService:
         r"missing\s+'(?P<char>[^']{1,3})'\s+in\s+'(?P<word>[^']+)'",
         flags=re.IGNORECASE,
     )
+    LEARNER_LEVELS = ("ignorant", "novice", "medium", "high", "fluent")
+    LEARNER_LEVEL_ALIASES = {
+        "a0": "ignorant",
+        "beginner": "ignorant",
+        "starter": "ignorant",
+        "ignorant": "ignorant",
+        "a1": "novice",
+        "a2": "novice",
+        "novice": "novice",
+        "basic": "novice",
+        "b1": "medium",
+        "intermediate": "medium",
+        "medium": "medium",
+        "mid": "medium",
+        "b2": "high",
+        "advanced": "high",
+        "high": "high",
+        "c1": "fluent",
+        "c2": "fluent",
+        "fluent": "fluent",
+        "proficient": "fluent",
+    }
+    ALLOCATION_POLICIES = ("auto_balance", "prioritize_llm", "prioritize_tts")
 
     def __init__(self) -> None:
         self.base_url = settings.OLLAMA_BASE_URL
@@ -140,6 +166,119 @@ class CoachService:
         if minimum is not None:
             value = max(minimum, value)
         return value
+
+    def _model_size_billion(self, model_name: Optional[str]) -> Optional[float]:
+        raw = str(model_name or "").strip().lower()
+        if not raw:
+            return None
+        match = re.search(r":(\d+(?:\.\d+)?)b\b", raw)
+        if not match:
+            return None
+        try:
+            parsed = float(match.group(1))
+        except ValueError:
+            return None
+        return parsed if parsed > 0 else None
+
+    def _allocation_policy_name(self) -> str:
+        configured = self._env_text("COACH_ALLOCATION_POLICY", settings.COACH_ALLOCATION_POLICY).strip().lower()
+        aliases = {
+            "auto": "auto_balance",
+            "balanced": "auto_balance",
+            "auto_balance": "auto_balance",
+            "llm": "prioritize_llm",
+            "prioritize_llm": "prioritize_llm",
+            "tts": "prioritize_tts",
+            "prioritize_tts": "prioritize_tts",
+        }
+        policy = aliases.get(configured, "auto_balance")
+        if policy not in self.ALLOCATION_POLICIES:
+            return "auto_balance"
+        return policy
+
+    def _runtime_allocation(
+        self,
+        *,
+        profile: Mapping[str, Any],
+        mode: str,
+        preferred_model: Optional[str] = None,
+    ) -> dict[str, Any]:
+        policy = self._allocation_policy_name()
+        runtime_mode = self._coach_runtime_mode(mode)
+        gpu_enabled = bool(settings.USE_GPU) and bool(profile.get("use_gpu"))
+        gpu_vram_gb = max(0.0, float(profile.get("gpu_vram_gb") or 0.0))
+        selected_model = str(preferred_model or profile.get("llm_primary_model") or "").strip()
+        profile_name = str(profile.get("name") or "").strip().lower()
+        pinned_model = bool(str(preferred_model or "").strip() and str(preferred_model or "").strip().lower() != "auto")
+        model_size_b = self._model_size_billion(selected_model)
+
+        llm_device = "cuda" if gpu_enabled else "cpu"
+        tts_device = str(profile.get("tts_device") or ("cuda" if gpu_enabled else "cpu")).strip().lower() or "cpu"
+        reason = "balanced_default"
+
+        if not gpu_enabled:
+            return {
+                "policy": policy,
+                "reason": "cuda_unavailable",
+                "llm_device": "cpu",
+                "tts_device": "cpu",
+                "gpu_vram_gb": gpu_vram_gb,
+                "selected_model": selected_model,
+                "model_size_b": model_size_b,
+                "pinned_model": pinned_model,
+            }
+
+        if runtime_mode == "idle":
+            return {
+                "policy": policy,
+                "reason": "idle_mode",
+                "llm_device": "cuda",
+                "tts_device": "cpu",
+                "gpu_vram_gb": gpu_vram_gb,
+                "selected_model": selected_model,
+                "model_size_b": model_size_b,
+                "pinned_model": pinned_model,
+            }
+
+        if policy == "prioritize_tts":
+            if pinned_model and (model_size_b is None or model_size_b > 4.0):
+                # Do not force-switch user-pinned heavy models.
+                llm_device = "cuda"
+                tts_device = "cpu"
+                reason = "manual_llm_pin"
+            else:
+                llm_device = "cpu"
+                tts_device = "cuda"
+                reason = "policy_prioritize_tts"
+        elif policy == "prioritize_llm":
+            llm_device = "cuda"
+            tts_device = "cpu"
+            reason = "policy_prioritize_llm"
+        else:
+            llm_device = "cuda"
+            if profile_name == "gpu_full":
+                tts_device = "cuda"
+                reason = "balanced_gpu_full"
+            elif pinned_model and (model_size_b is None or model_size_b > 4.0):
+                tts_device = "cpu"
+                reason = "manual_llm_pin"
+            elif model_size_b is not None and model_size_b <= 3.5 and gpu_vram_gb >= 8.0:
+                tts_device = "cuda"
+                reason = "balanced_light_llm"
+            else:
+                tts_device = "cpu"
+                reason = "insufficient_vram"
+
+        return {
+            "policy": policy,
+            "reason": reason,
+            "llm_device": llm_device,
+            "tts_device": tts_device,
+            "gpu_vram_gb": gpu_vram_gb,
+            "selected_model": selected_model,
+            "model_size_b": model_size_b,
+            "pinned_model": pinned_model,
+        }
 
     def _coach_hardware_profile(self) -> dict[str, Any]:
         high_vram_threshold = self._env_float(
@@ -615,6 +754,339 @@ class CoachService:
                 return name
         return None
 
+    def _normalize_learner_level(self, value: Optional[str]) -> str:
+        normalized = str(value or "").strip().lower()
+        if not normalized:
+            return "medium"
+        if normalized in self.LEARNER_LEVELS:
+            return normalized
+        return self.LEARNER_LEVEL_ALIASES.get(normalized, "medium")
+
+    def _coaching_level_instructions(self, level: str) -> str:
+        normalized = self._normalize_learner_level(level)
+        if normalized in {"ignorant", "novice"}:
+            return (
+                "Learner level is beginner. Be patient, positive, and step-by-step. "
+                "Allow the learner to answer in native language when needed, then bridge to target language with simple examples. "
+                "Use short practical drills and one tiny next step."
+            )
+        if normalized == "medium":
+            return (
+                "Learner level is medium. Give thorough corrections with clear examples. "
+                "When helpful, explain in both target and native language."
+            )
+        if normalized == "high":
+            return (
+                "Learner level is high. Be more critical about precision, nuance, and natural phrasing. "
+                "Keep feedback direct and concrete."
+            )
+        return (
+            "Learner level is fluent. Be highly critical and focus on advanced accuracy, style, and naturalness. "
+            "Challenge the learner with concise, high-value feedback."
+        )
+
+    def _should_attach_translation(
+        self,
+        *,
+        target_language: Optional[str],
+        native_language: Optional[str],
+    ) -> bool:
+        target = str(target_language or "").strip().lower()
+        native = str(native_language or "").strip()
+        if not native:
+            return False
+        native_supported = self._resolve_supported_language_name(native)
+        if native_supported is None:
+            return False
+        return native_supported.lower() != target
+
+    def _append_native_translation(
+        self,
+        *,
+        message: str,
+        translation: Any,
+        target_language: Optional[str],
+        native_language: Optional[str],
+    ) -> str:
+        base = re.sub(r"\s+", " ", str(message or "")).strip()
+        if not base:
+            return base
+        if not self._should_attach_translation(
+            target_language=target_language,
+            native_language=native_language,
+        ):
+            return base
+        translated = self._normalize_translation_payload(
+            translation=translation,
+            native_language=native_language,
+        )
+        if not translated:
+            return base
+        native = self._resolve_supported_language_name(native_language) or str(native_language or "").strip() or "Native"
+        if translated.lower() in base.lower():
+            return base
+        return f"{base}\n[{native}] {translated}"
+
+    def _normalize_translation_payload(
+        self,
+        *,
+        translation: Any,
+        native_language: Optional[str],
+    ) -> str:
+        payload = translation
+        if isinstance(payload, str):
+            normalized = payload.strip()
+            if not normalized:
+                return ""
+            parsed = self._try_parse_translation_mapping(normalized)
+            if parsed is not None:
+                payload = parsed
+            else:
+                return re.sub(r"\s+", " ", normalized)
+        if isinstance(payload, Mapping):
+            picked = self._pick_translation_from_mapping(
+                payload=payload,
+                native_language=native_language,
+            )
+            return re.sub(r"\s+", " ", picked).strip()
+        if isinstance(payload, Sequence) and not isinstance(payload, (bytes, bytearray, str)):
+            for item in payload:
+                rendered = self._normalize_translation_payload(
+                    translation=item,
+                    native_language=native_language,
+                )
+                if rendered:
+                    return rendered
+            return ""
+        rendered = re.sub(r"\s+", " ", str(payload or "")).strip()
+        if rendered.startswith("{") and rendered.endswith("}"):
+            parsed = self._try_parse_translation_mapping(rendered)
+            if parsed is not None:
+                return self._pick_translation_from_mapping(
+                    payload=parsed,
+                    native_language=native_language,
+                )
+        return rendered
+
+    def _try_parse_translation_mapping(self, raw: str) -> Optional[dict[str, Any]]:
+        value = str(raw or "").strip()
+        if not value or not value.startswith("{") or not value.endswith("}"):
+            return None
+        for parser in (json.loads, ast.literal_eval):
+            try:
+                parsed = parser(value)
+            except Exception:
+                continue
+            if isinstance(parsed, Mapping):
+                return dict(parsed)
+        return None
+
+    def _translation_native_code(self, native_language: Optional[str]) -> str:
+        raw = str(native_language or "").strip().lower()
+        if raw in self.CODE_TO_LANGUAGE_NAME:
+            return raw
+        if len(raw) == 2 and raw in self.CODE_TO_LANGUAGE_NAME:
+            return raw
+        native_name = self._resolve_supported_language_name(native_language)
+        if native_name:
+            normalized_name = native_name.lower()
+            for code, name in self.CODE_TO_LANGUAGE_NAME.items():
+                if name.lower() == normalized_name:
+                    return code
+        return ""
+
+    def _coerce_translation_leaf(self, value: Any) -> str:
+        if isinstance(value, str):
+            return re.sub(r"\s+", " ", value).strip()
+        if isinstance(value, Mapping):
+            for key in ("text", "translation", "value", "content"):
+                rendered = re.sub(r"\s+", " ", str(value.get(key) or "")).strip()
+                if rendered:
+                    return rendered
+            return ""
+        if isinstance(value, Sequence) and not isinstance(value, (bytes, bytearray, str)):
+            for item in value:
+                rendered = self._coerce_translation_leaf(item)
+                if rendered:
+                    return rendered
+            return ""
+        return re.sub(r"\s+", " ", str(value or "")).strip()
+
+    def _pick_translation_from_mapping(
+        self,
+        *,
+        payload: Mapping[str, Any],
+        native_language: Optional[str],
+    ) -> str:
+        native_name = self._resolve_supported_language_name(native_language) or str(native_language or "").strip()
+        native_code = self._translation_native_code(native_language)
+        keys: list[str] = []
+        if native_code:
+            keys.extend(
+                [
+                    native_code,
+                    native_code.lower(),
+                    native_code.upper(),
+                    native_code.replace("-", "_"),
+                    native_code.replace("_", "-"),
+                ]
+            )
+        if native_name:
+            keys.extend([native_name, native_name.lower(), native_name.upper()])
+        keys.extend(["native", "translation", "text", "message", "value"])
+
+        for key in keys:
+            if key not in payload:
+                continue
+            rendered = self._coerce_translation_leaf(payload.get(key))
+            if rendered:
+                return rendered
+
+        for value in payload.values():
+            rendered = self._coerce_translation_leaf(value)
+            if rendered:
+                return rendered
+        return ""
+
+    def _sanitize_tts_text(self, text: str) -> str:
+        lines = [
+            re.sub(r"\s+", " ", str(line or "")).strip()
+            for line in str(text or "").splitlines()
+        ]
+        lines = [line for line in lines if line]
+        if not lines:
+            return ""
+
+        # Keep spoken coach content and skip appended translation-only lines.
+        spoken_lines = [
+            line for line in lines if not re.match(r"^\[[^\]]+\]\s+.+$", line)
+        ]
+        if not spoken_lines:
+            spoken_lines = [lines[0]]
+
+        spoken = " ".join(spoken_lines)
+        spoken = re.sub(r"`{1,3}[^`]*`{1,3}", " ", spoken)
+        spoken = re.sub(r"^\s*[-*•]\s*", "", spoken)
+        spoken = re.sub(r"\s+", " ", spoken).strip()
+        if not spoken:
+            return ""
+
+        max_chars_raw = self._env_text("COACH_TTS_MAX_TEXT_CHARS", "600")
+        try:
+            max_chars = int(max_chars_raw)
+        except (TypeError, ValueError):
+            max_chars = 600
+        max_chars = max(160, min(max_chars, 2000))
+
+        if len(spoken) <= max_chars:
+            return spoken
+
+        clipped = spoken[:max_chars]
+        sentence_break = max(clipped.rfind("."), clipped.rfind("!"), clipped.rfind("?"))
+        if sentence_break >= int(max_chars * 0.6):
+            return clipped[: sentence_break + 1].strip()
+        shortened = clipped.rsplit(" ", 1)[0].strip()
+        return shortened or clipped.strip()
+
+    def _normalized_message_key(self, value: Optional[str]) -> str:
+        normalized = re.sub(r"[^a-z0-9\s]", " ", str(value or "").lower())
+        normalized = re.sub(r"\s+", " ", normalized).strip()
+        return normalized
+
+    def _reply_similarity(self, first: str, second: str) -> float:
+        a = self._normalized_message_key(first)
+        b = self._normalized_message_key(second)
+        if not a or not b:
+            return 0.0
+        return float(SequenceMatcher(None, a, b).ratio())
+
+    def _persona_display_name(self, persona_style: Optional[str]) -> str:
+        normalized = str(persona_style or "").strip().lower()
+        for voice_id, label in self.BUILTIN_VOICE_LABELS.items():
+            if voice_id in normalized or label.lower() in normalized:
+                return label
+        return "Coach AI"
+
+    def _is_name_question(self, transcript: str) -> bool:
+        normalized = re.sub(r"\s+", " ", str(transcript or "").lower()).strip()
+        if not normalized:
+            return False
+        patterns = (
+            r"\bwhat(?:'s| is)\s+your\s+name\b",
+            r"\bwho\s+are\s+you\b",
+            r"\bur\s+name\b",
+            r"\bton\s+nom\b",
+            r"\btu\s+t[' ]?appell(?:es)?\b",
+            r"\bcomment\s+tu\s+t[' ]?appell(?:es)?\b",
+            r"\bcomment\s+vous\s+vous\s+appelez\b",
+        )
+        return any(re.search(pattern, normalized) for pattern in patterns)
+
+    def _name_reply(self, *, target_language: str, persona_style: Optional[str]) -> str:
+        name = self._persona_display_name(persona_style)
+        normalized = str(target_language or "").strip().lower()
+        if normalized.startswith("french"):
+            return f"Je m'appelle {name}."
+        return f"My name is {name}."
+
+    def _apply_direct_question_guard(
+        self,
+        *,
+        transcript: str,
+        candidate_reply: str,
+        target_language: str,
+        persona_style: Optional[str],
+    ) -> str:
+        if not self._is_name_question(transcript):
+            return candidate_reply
+        name_reply = self._name_reply(target_language=target_language, persona_style=persona_style)
+        if self._normalized_message_key(name_reply) in self._normalized_message_key(candidate_reply):
+            return candidate_reply
+        return f"{name_reply} {candidate_reply}".strip()
+
+    def _prevent_repeat_loop(
+        self,
+        *,
+        candidate_reply: str,
+        last_coach_reply: Optional[str],
+        target_language: str,
+        native_language: Optional[str],
+        learner_level: str,
+        focus_area: Optional[str],
+        learner_transcript: Optional[str] = None,
+    ) -> str:
+        current_key = self._normalized_message_key(candidate_reply)
+        previous_key = self._normalized_message_key(last_coach_reply)
+        if not current_key:
+            return candidate_reply
+        is_repeat = current_key == previous_key
+        if not is_repeat and previous_key:
+            similarity = self._reply_similarity(candidate_reply, str(last_coach_reply or ""))
+            overlap = current_key in previous_key or previous_key in current_key
+            is_repeat = similarity >= 0.82 or overlap
+        if not is_repeat:
+            return candidate_reply
+
+        level = self._normalize_learner_level(learner_level)
+        topic = str(focus_area or "this topic").strip() or "this topic"
+        learner_hint = re.sub(r"\s+", " ", str(learner_transcript or "")).strip()
+        if learner_hint:
+            topic = learner_hint
+        if level in {"ignorant", "novice"} and native_language:
+            native = self._resolve_supported_language_name(native_language) or str(native_language).strip()
+            return (
+                f"Let's slow down and make it easy. You can answer in {native}, and I'll help you build the same idea in {target_language}. "
+                f"What is one simple sentence you want to say about {topic}?"
+            )
+        if level == "medium":
+            return (
+                f"Let's reset with one clear step. Give me one short sentence about {topic}, "
+                f"then I'll improve it and explain why."
+            )
+        return (
+            f"Let's move to a sharper variation: give one precise sentence about {topic} with better word choice and grammar."
+        )
+
     def _resolve_voice_cipher(self) -> Fernet:
         configured = str(
             os.environ.get("COACH_VOICE_SECRET_KEY", settings.COACH_VOICE_SECRET_KEY) or ""
@@ -1005,6 +1477,23 @@ class CoachService:
 
         return voice_name, rate, pitch
 
+    def _builtin_voice_fallback_preset(
+        self,
+        *,
+        builtin_voice_id: str,
+        current_preset: Optional[str],
+    ) -> str:
+        normalized_current = str(current_preset or "default").strip().lower() or "default"
+        if normalized_current != "default":
+            return normalized_current
+
+        normalized_voice_id = str(builtin_voice_id or "").strip().lower()
+        if normalized_voice_id in {"goku", "gute"}:
+            return "male"
+        if normalized_voice_id == "anby":
+            return "female"
+        return "default"
+
     def _synthesize_with_espeak(
         self,
         *,
@@ -1096,6 +1585,50 @@ class CoachService:
         media_type = response.headers.get("content-type", "audio/wav")
         return audio_bytes, media_type
 
+    async def _synthesize_with_openvoice(
+        self,
+        *,
+        text: str,
+        language: Optional[str],
+        voice_preset: Optional[str],
+        persona_style: Optional[str],
+        voice_mode: str,
+        reference_audio_bytes: Optional[bytes],
+        builtin_voice_id: Optional[str] = None,
+        runtime_device: Optional[str] = None,
+    ) -> tuple[bytes, str]:
+        base_url, model_id, timeout_sec = self._openvoice_runtime_config()
+        payload: dict[str, Any] = {
+            "text": text,
+            "language": language or "English",
+            "voice_preset": voice_preset or "default",
+            "persona_style": persona_style or "",
+            "voice_mode": voice_mode,
+            "model_id": model_id,
+        }
+        normalized_runtime_device = str(runtime_device or "").strip().lower()
+        if normalized_runtime_device in {"cpu", "cuda"}:
+            payload["runtime_device"] = normalized_runtime_device
+        normalized_builtin_voice_id = str(builtin_voice_id or "").strip().lower()
+        if normalized_builtin_voice_id:
+            payload["builtin_voice_id"] = normalized_builtin_voice_id
+        if reference_audio_bytes:
+            payload["reference_audio_b64"] = base64.b64encode(reference_audio_bytes).decode("ascii")
+
+        timeout = httpx.Timeout(connect=10.0, read=float(timeout_sec), write=30.0, pool=30.0)
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.post(f"{base_url.rstrip('/')}/synthesize", json=payload)
+
+        if response.status_code >= 400:
+            detail = response.text.strip() or f"OpenVoice request failed ({response.status_code})"
+            raise RuntimeError(detail)
+
+        audio_bytes = response.content
+        if not audio_bytes:
+            raise RuntimeError("OpenVoice returned empty audio")
+        media_type = response.headers.get("content-type", "audio/wav")
+        return audio_bytes, media_type
+
     def _cosyvoice_runtime_config(self) -> tuple[str, str, int]:
         base_url = str(
             os.environ.get("COACH_COSYVOICE_BASE_URL", settings.COACH_COSYVOICE_BASE_URL)
@@ -1114,6 +1647,26 @@ class CoachService:
             base_url = settings.COACH_COSYVOICE_BASE_URL
         if not model_id:
             model_id = settings.COACH_COSYVOICE_MODEL_ID
+        return base_url, model_id, timeout_sec
+
+    def _openvoice_runtime_config(self) -> tuple[str, str, int]:
+        base_url = str(
+            os.environ.get("COACH_OPENVOICE_BASE_URL", settings.COACH_OPENVOICE_BASE_URL)
+            or settings.COACH_OPENVOICE_BASE_URL
+        ).strip()
+        model_id = str(
+            os.environ.get("COACH_OPENVOICE_MODEL_ID", settings.COACH_OPENVOICE_MODEL_ID)
+            or settings.COACH_OPENVOICE_MODEL_ID
+        ).strip()
+        timeout_raw = os.environ.get("COACH_OPENVOICE_TIMEOUT_SEC", settings.COACH_OPENVOICE_TIMEOUT_SEC)
+        try:
+            timeout_sec = max(5, int(timeout_raw))
+        except (TypeError, ValueError):
+            timeout_sec = int(settings.COACH_OPENVOICE_TIMEOUT_SEC)
+        if not base_url:
+            base_url = settings.COACH_OPENVOICE_BASE_URL
+        if not model_id:
+            model_id = settings.COACH_OPENVOICE_MODEL_ID
         return base_url, model_id, timeout_sec
 
     def _coach_runtime_mode(self, mode: Optional[str]) -> str:
@@ -1268,9 +1821,11 @@ class CoachService:
         *,
         warm: bool,
         mode: str,
+        preferred_model: Optional[str] = None,
     ) -> dict[str, Any]:
         profile = self._coach_hardware_profile()
-        selected_model = str(profile.get("llm_primary_model") or settings.HEAVY_MODEL)
+        requested_model = str(preferred_model or "").strip()
+        selected_model = str(requested_model or profile.get("llm_primary_model") or settings.HEAVY_MODEL)
         if mode == "idle":
             selected_model = settings.SMART_MODEL
         timeout = httpx.Timeout(connect=3.0, read=15.0, write=10.0, pool=10.0)
@@ -1280,6 +1835,7 @@ class CoachService:
             "state": "error",
             "detail": "Ollama unavailable.",
             "selected_model": selected_model,
+            "selection_reason": "requested_model" if requested_model and requested_model.lower() != "auto" else "profile_default",
             "available_models": [],
             "runtime_profile": profile.get("name"),
         }
@@ -1298,6 +1854,16 @@ class CoachService:
                 status["ready"] = bool(models)
                 status["state"] = "ready" if models else "idle"
                 status["detail"] = "Ollama ready." if models else "No Ollama models installed."
+                if models and selected_model not in models:
+                    fallback_model = models[0]
+                    status["selection_reason"] = (
+                        "requested_model_unavailable"
+                        if requested_model and requested_model.lower() != "auto"
+                        else "profile_model_unavailable"
+                    )
+                    status["detail"] = f"Using available Ollama model {fallback_model}."
+                    selected_model = fallback_model
+                    status["selected_model"] = selected_model
 
                 if warm and selected_model:
                     keep_alive = str(
@@ -1357,19 +1923,38 @@ class CoachService:
         *,
         warm: bool = False,
         mode: Optional[str] = None,
+        preferred_model: Optional[str] = None,
+        preferred_tts_provider: Optional[str] = None,
     ) -> dict[str, Any]:
         profile = self._coach_hardware_profile()
         runtime_mode = self._coach_runtime_mode(mode)
         want_voice = runtime_mode == "voice"
-        tts_task = asyncio.create_task(self.get_tts_status(warm=(warm and want_voice)))
+        tts_task = asyncio.create_task(
+            self.get_tts_status(
+                warm=(warm and want_voice),
+                preferred_model=preferred_model,
+                preferred_tts_provider=preferred_tts_provider,
+            )
+        )
         asr_task = asyncio.create_task(self._asr_status(warm=(warm and want_voice)))
-        llm_task = asyncio.create_task(self._ollama_status(warm=warm, mode=runtime_mode))
+        llm_task = asyncio.create_task(
+            self._ollama_status(
+                warm=warm,
+                mode=runtime_mode,
+                preferred_model=preferred_model,
+            )
+        )
         lt_task = asyncio.create_task(self._languagetool_status())
         tts_status, asr_status, llm_status, lt_status = await asyncio.gather(
             tts_task,
             asr_task,
             llm_task,
             lt_task,
+        )
+        allocation = self._runtime_allocation(
+            profile=profile,
+            mode=runtime_mode,
+            preferred_model=preferred_model or str(llm_status.get("selected_model") or ""),
         )
         components = {
             "tts": tts_status,
@@ -1387,6 +1972,15 @@ class CoachService:
             "mode": runtime_mode,
             "ready": ready,
             "state": state,
+            "allocation_policy": str(allocation.get("policy") or "auto_balance"),
+            "allocation_reason": str(allocation.get("reason") or ""),
+            "llm_device": str(allocation.get("llm_device") or ""),
+            "tts_device": str(allocation.get("tts_device") or ""),
+            "vram_snapshot": {
+                "gpu_enabled": bool(profile.get("use_gpu")),
+                "gpu_vram_gb": profile.get("gpu_vram_gb"),
+                "high_vram_threshold_gb": profile.get("high_vram_threshold_gb"),
+            },
             "runtime_profile": {
                 "name": str(profile.get("name") or ""),
                 "gpu_enabled": bool(profile.get("use_gpu")),
@@ -1397,6 +1991,7 @@ class CoachService:
                 "asr_fast_model": str(profile.get("asr_fast_model") or ""),
                 "asr_accurate_model": str(profile.get("asr_accurate_model") or ""),
                 "tts_device": str(profile.get("tts_device") or ""),
+                "allocation_policy": str(allocation.get("policy") or "auto_balance"),
             },
             "components": components,
         }
@@ -1407,18 +2002,40 @@ class CoachService:
             return await self.get_runtime_status(warm=False, mode=runtime_mode)
         return await self.get_runtime_status(warm=True, mode=runtime_mode)
 
-    async def get_tts_status(self, *, warm: bool = False) -> dict[str, Any]:
+    async def get_tts_status(
+        self,
+        *,
+        warm: bool = False,
+        preferred_model: Optional[str] = None,
+        preferred_tts_provider: Optional[str] = None,
+    ) -> dict[str, Any]:
         profile = self._coach_hardware_profile()
-        desired_device = self._resolve_runtime_device(
-            env_key="COACH_COSYVOICE_DEVICE",
-            configured_default=settings.COACH_COSYVOICE_DEVICE,
-            profile_default=str(profile.get("tts_device") or "cpu"),
+        allocation = self._runtime_allocation(
+            profile=profile,
+            mode="voice",
+            preferred_model=preferred_model,
         )
         provider = str(
-            os.environ.get("COACH_TTS_PROVIDER", settings.COACH_TTS_PROVIDER)
+            preferred_tts_provider
+            or os.environ.get("COACH_TTS_PROVIDER", settings.COACH_TTS_PROVIDER)
             or settings.COACH_TTS_PROVIDER
         ).strip().lower() or "espeak"
-        if provider != "cosyvoice":
+        if provider not in {"espeak", "cosyvoice", "openvoice"}:
+            provider = "espeak"
+        device_env_key = "COACH_COSYVOICE_DEVICE"
+        configured_default = settings.COACH_COSYVOICE_DEVICE
+        if provider == "openvoice":
+            device_env_key = "COACH_OPENVOICE_DEVICE"
+            configured_default = settings.COACH_OPENVOICE_DEVICE
+        desired_device = self._resolve_runtime_device(
+            env_key=device_env_key,
+            configured_default=configured_default,
+            profile_default=str(allocation.get("tts_device") or profile.get("tts_device") or "cpu"),
+        )
+        fallback_reason = ""
+        if str(allocation.get("tts_device") or "").strip().lower() == "cpu":
+            fallback_reason = str(allocation.get("reason") or "")
+        if provider == "espeak":
             return {
                 "ok": True,
                 "engine": "espeak",
@@ -1431,9 +2048,17 @@ class CoachService:
                 "warmup_active": False,
                 "updated_at": None,
                 "runtime_device": desired_device,
+                "planned_runtime_device": desired_device,
+                "fallback_reason": fallback_reason,
+                "allocation_policy": str(allocation.get("policy") or "auto_balance"),
+                "allocation_reason": str(allocation.get("reason") or ""),
             }
 
+        engine_name = "cosyvoice"
         base_url, model_id, timeout_sec = self._cosyvoice_runtime_config()
+        if provider == "openvoice":
+            engine_name = "openvoice"
+            base_url, model_id, timeout_sec = self._openvoice_runtime_config()
         timeout = httpx.Timeout(connect=5.0, read=min(float(timeout_sec), 15.0), write=10.0, pool=10.0)
         params = {"runtime_device": desired_device}
         if warm:
@@ -1444,7 +2069,7 @@ class CoachService:
         except Exception as exc:
             return {
                 "ok": False,
-                "engine": "cosyvoice",
+                "engine": engine_name,
                 "provider": provider,
                 "ready": False,
                 "state": "error",
@@ -1454,13 +2079,17 @@ class CoachService:
                 "warmup_active": False,
                 "updated_at": None,
                 "runtime_device": desired_device,
+                "planned_runtime_device": desired_device,
+                "fallback_reason": fallback_reason or "service_unreachable",
+                "allocation_policy": str(allocation.get("policy") or "auto_balance"),
+                "allocation_reason": str(allocation.get("reason") or ""),
             }
 
         if response.status_code >= 400:
             detail = response.text.strip() or f"Voice status failed ({response.status_code})"
             return {
                 "ok": False,
-                "engine": "cosyvoice",
+                "engine": engine_name,
                 "provider": provider,
                 "ready": False,
                 "state": "error",
@@ -1470,6 +2099,10 @@ class CoachService:
                 "warmup_active": False,
                 "updated_at": None,
                 "runtime_device": desired_device,
+                "planned_runtime_device": desired_device,
+                "fallback_reason": fallback_reason or "service_error",
+                "allocation_policy": str(allocation.get("policy") or "auto_balance"),
+                "allocation_reason": str(allocation.get("reason") or ""),
             }
 
         payload: dict[str, Any] = {}
@@ -1485,9 +2118,12 @@ class CoachService:
         detail = str(payload.get("detail") or "").strip()
         if not detail:
             detail = "Voice model ready." if ready else "Voice model is preparing."
+        runtime_device = str(payload.get("runtime_device") or desired_device)
+        if desired_device == "cuda" and runtime_device != "cuda":
+            fallback_reason = fallback_reason or "cuda_unavailable"
         return {
             "ok": bool(payload.get("ok", True)),
-            "engine": str(payload.get("engine") or "cosyvoice"),
+            "engine": str(payload.get("engine") or engine_name),
             "provider": provider,
             "ready": ready,
             "state": state,
@@ -1496,7 +2132,11 @@ class CoachService:
             "loaded_model_id": str(payload.get("loaded_model_id") or ""),
             "warmup_active": bool(payload.get("warmup_active")),
             "updated_at": payload.get("updated_at"),
-            "runtime_device": str(payload.get("runtime_device") or desired_device),
+            "runtime_device": runtime_device,
+            "planned_runtime_device": desired_device,
+            "fallback_reason": fallback_reason,
+            "allocation_policy": str(allocation.get("policy") or "auto_balance"),
+            "allocation_reason": str(allocation.get("reason") or ""),
         }
 
     async def synthesize_reply_audio(
@@ -1507,6 +2147,7 @@ class CoachService:
         voice_preset: Optional[str],
         persona_style: Optional[str] = None,
         tts_provider: Optional[str] = None,
+        preferred_model: Optional[str] = None,
         voice_mode: Optional[str] = "preset",
         voice_profile_id: Optional[str] = None,
         reference_clip_id: Optional[str] = None,
@@ -1516,19 +2157,36 @@ class CoachService:
         normalized = re.sub(r"\s+", " ", str(text or "")).strip()
         if not normalized:
             raise ValueError("Text is empty")
+        spoken_text = self._sanitize_tts_text(normalized)
+        if not spoken_text:
+            raise ValueError("Text is empty")
+        if spoken_text != normalized:
+            logger.debug("Sanitized coach TTS text from %s chars to %s chars", len(normalized), len(spoken_text))
 
         profile = self._coach_hardware_profile()
-        desired_tts_device = self._resolve_runtime_device(
-            env_key="COACH_COSYVOICE_DEVICE",
-            configured_default=settings.COACH_COSYVOICE_DEVICE,
-            profile_default=str(profile.get("tts_device") or "cpu"),
+        allocation = self._runtime_allocation(
+            profile=profile,
+            mode="voice",
+            preferred_model=preferred_model,
         )
-        clipped = normalized[:2000]
+        clipped = spoken_text
         resolved_provider = str(
             tts_provider
             or os.environ.get("COACH_TTS_PROVIDER", settings.COACH_TTS_PROVIDER)
             or settings.COACH_TTS_PROVIDER
         ).strip().lower()
+        if resolved_provider not in {"espeak", "cosyvoice", "openvoice"}:
+            resolved_provider = "espeak"
+        device_env_key = "COACH_COSYVOICE_DEVICE"
+        configured_default = settings.COACH_COSYVOICE_DEVICE
+        if resolved_provider == "openvoice":
+            device_env_key = "COACH_OPENVOICE_DEVICE"
+            configured_default = settings.COACH_OPENVOICE_DEVICE
+        desired_tts_device = self._resolve_runtime_device(
+            env_key=device_env_key,
+            configured_default=configured_default,
+            profile_default=str(allocation.get("tts_device") or profile.get("tts_device") or "cpu"),
+        )
         resolved_mode = str(voice_mode or "preset").strip().lower() or "preset"
         if resolved_mode not in {"preset", "cloned_profile", "cloned_session"}:
             raise ValueError("Unsupported voice_mode")
@@ -1538,6 +2196,25 @@ class CoachService:
         resolved_preset = str(voice_preset or "default").strip().lower()
         if "anby" in str(persona_style or "").lower() and resolved_preset == "default":
             resolved_preset = "anby"
+        language_code = (self._target_language_code(language) or "en").lower()
+        if (
+            resolved_provider == "cosyvoice"
+            and normalized_builtin_voice_id
+            and language_code not in self.BUILTIN_CLONE_SAFE_LANGUAGE_CODES
+        ):
+            fallback_preset = self._builtin_voice_fallback_preset(
+                builtin_voice_id=normalized_builtin_voice_id,
+                current_preset=resolved_preset,
+            )
+            logger.info(
+                "Builtin clone voice '%s' is not language-safe for %s; using local preset '%s' instead.",
+                normalized_builtin_voice_id,
+                language_code,
+                fallback_preset,
+            )
+            resolved_provider = "espeak"
+            resolved_preset = fallback_preset
+            normalized_builtin_voice_id = ""
 
         if resolved_provider == "cosyvoice":
             if user_id is None:
@@ -1571,6 +2248,47 @@ class CoachService:
                 if requires_clone_voice:
                     raise RuntimeError(
                         "Selected clone voice is unavailable right now. CosyVoice cloning failed; local fallback is disabled for clone voices."
+                    )
+                allow_fallback = str(
+                    os.environ.get(
+                        "COACH_TTS_ALLOW_ESPEAK_FALLBACK",
+                        str(settings.COACH_TTS_ALLOW_ESPEAK_FALLBACK),
+                    )
+                ).strip().lower() in {"1", "true", "yes", "on"}
+                if not allow_fallback:
+                    raise
+
+        if resolved_provider == "openvoice":
+            if user_id is None:
+                raise ValueError("user_id is required for openvoice synthesis")
+            openvoice_mode = resolved_mode
+            if normalized_builtin_voice_id and openvoice_mode == "preset":
+                openvoice_mode = "cloned_session"
+            requires_clone_voice = bool(normalized_builtin_voice_id) or openvoice_mode in {"cloned_profile", "cloned_session"}
+            reference_audio_bytes: Optional[bytes] = None
+            if not normalized_builtin_voice_id:
+                reference_audio_bytes = await self._load_reference_audio_bytes(
+                    user_id=user_id,
+                    voice_mode=openvoice_mode,
+                    voice_profile_id=voice_profile_id,
+                    reference_clip_id=reference_clip_id,
+                    builtin_voice_id=normalized_builtin_voice_id,
+                )
+            try:
+                return await self._synthesize_with_openvoice(
+                    text=clipped,
+                    language=language,
+                    voice_preset=resolved_preset,
+                    persona_style=persona_style,
+                    voice_mode=openvoice_mode,
+                    reference_audio_bytes=reference_audio_bytes,
+                    builtin_voice_id=normalized_builtin_voice_id or None,
+                    runtime_device=desired_tts_device,
+                )
+            except Exception:
+                if requires_clone_voice:
+                    raise RuntimeError(
+                        "Selected clone voice is unavailable right now. OpenVoice cloning failed; local fallback is disabled for clone voices."
                     )
                 allow_fallback = str(
                     os.environ.get(
@@ -2183,10 +2901,14 @@ class CoachService:
         self,
         transcript: str,
         *,
+        target_language: Optional[str] = None,
+        native_language: Optional[str] = None,
+        learner_level: Optional[str] = None,
         focus_area: Optional[str] = None,
         persona_style: Optional[str] = None,
     ) -> dict:
         word_count = len(transcript.split())
+        normalized_level = self._normalize_learner_level(learner_level)
         mistakes = []
         if word_count < 5:
             mistakes.append(
@@ -2213,9 +2935,10 @@ class CoachService:
         else:
             score = 55
         correction = mistakes[0]["suggestion"] if mistakes and mistakes[0]["category"] != "general" else None
-        explanation = (
-            "Target: keep your answer precise.\nNative: keep expanding with concrete examples."
-        )
+        explanation = "Target: keep your answer precise and practical."
+        native_name = self._resolve_supported_language_name(native_language) or ""
+        if native_name and native_name.lower() != str(target_language or "").strip().lower():
+            explanation = f"{explanation}\n{native_name}: keep expanding with concrete examples."
         topic = str(focus_area or "").strip()
         if topic:
             follow_up_question = f"Can you give one concrete example about {topic}?"
@@ -2223,14 +2946,56 @@ class CoachService:
             follow_up_question = "Can you answer again with one concrete example?"
         persona_hint = str(persona_style or "").strip()
         persona_prefix = "Acknowledged. " if persona_hint else ""
+        if normalized_level in {"ignorant", "novice"} and native_name:
+            follow_up_question = (
+                f"You can answer in {native_name} if needed. What is one basic sentence you want to say?"
+            )
         return {
             "reply": f"{persona_prefix}Great effort. Let's refine this response: {transcript}",
             "follow_up_question": follow_up_question,
             "score": score,
             "correction": correction,
             "explanation": explanation,
+            "response_translation": "",
             "mistakes": mistakes,
         }
+
+    def _has_actionable_mistake(self, mistakes: Sequence[Any]) -> bool:
+        for item in mistakes:
+            data = self._coerce_mapping(item)
+            category = str(data.get("category") or "").strip().lower()
+            detail = str(data.get("detail") or data.get("message") or "").strip()
+            if detail and category not in {"general", "audio"}:
+                return True
+        return False
+
+    def _prepend_explicit_recast(
+        self,
+        *,
+        reply: str,
+        correction: Optional[str],
+        mistakes: Sequence[Any],
+        confidence_band: str = "high",
+    ) -> str:
+        normalized_reply = re.sub(r"\s+", " ", str(reply or "")).strip()
+        normalized_correction = re.sub(r"\s+", " ", str(correction or "")).strip()
+        if not normalized_correction:
+            return normalized_reply
+        correction_lower = normalized_correction.lower()
+        if correction_lower.startswith(("use ", "add ", "remove ", "say ", "try ", "avoid ", "replace ", "change ")):
+            return normalized_reply
+        if str(confidence_band or "high").strip().lower() == "low":
+            return normalized_reply
+        if not self._has_actionable_mistake(mistakes):
+            return normalized_reply
+        if normalized_correction.lower() in normalized_reply.lower():
+            return normalized_reply
+        recast_prefix = f"You mean: {normalized_correction}"
+        if recast_prefix[-1:] not in {".", "!", "?"}:
+            recast_prefix = f"{recast_prefix}."
+        if not normalized_reply:
+            return recast_prefix
+        return f"{recast_prefix} {normalized_reply}".strip()
 
     def _extract_json_object(self, text: str) -> Optional[dict]:
         text = text.strip()
@@ -2256,32 +3021,62 @@ class CoachService:
         model: str,
         transcript: str,
         target_language: str,
+        native_language: Optional[str] = None,
+        learner_level: str = "medium",
         focus_area: Optional[str] = None,
+        recent_turns: Optional[Sequence[CoachTurn]] = None,
         persona_style: Optional[str] = None,
         asr_confidence_band: str = "high",
     ) -> tuple[dict[str, Any], int]:
         subject = str(focus_area or "").strip() or "General conversation"
         persona = str(persona_style or "").strip() or "Default coach"
         confidence_band = str(asr_confidence_band or "high").strip().lower()
+        normalized_level = self._normalize_learner_level(learner_level)
+        level_instructions = self._coaching_level_instructions(normalized_level)
+        recent_context: List[str] = []
+        for turn in list(recent_turns or [])[-2:]:
+            learner = str(turn.transcript or "").strip()
+            coach_reply = str(turn.reply or "").strip()
+            if learner:
+                recent_context.append(f"Learner: {learner}")
+            if coach_reply:
+                recent_context.append(f"Coach: {coach_reply}")
+        context_block = "\n".join(recent_context) if recent_context else "No prior turns."
+        needs_translation = self._should_attach_translation(
+            target_language=target_language,
+            native_language=native_language,
+        )
         system_prompt = (
-            "You are a language coach in live voice mode. Return JSON only.\n"
+            "You are an empathetic language coach in live voice mode. Return JSON only.\n"
             "Output fields:\n"
             "1) reply: one short response sentence.\n"
             "2) follow_up_question: one short question that keeps the learner speaking.\n"
             "3) quick_recast: optional short correction/recast.\n"
             "4) needs_confirmation: boolean.\n"
             "5) confirmation_text: optional question when transcription confidence is low.\n"
+            "6) response_translation: optional native-language translation of the final coach message.\n"
             "Rules:\n"
-            "- If there is an obvious grammar mistake and confidence is not low, include a quick recast then continue the conversation.\n"
+            "- If there is an obvious grammar mistake and confidence is not low, include a direct recast correction.\n"
             "- If confidence is low, avoid strict correction and ask confirmation first.\n"
+            "- If the learner asks a direct question, answer it first before continuing the drill.\n"
+            "- Do not claim you did not understand unless confidence is low.\n"
+            "- Keep tone positive and calming; if learner is confused, reduce complexity.\n"
+            "- For beginner learners, allow native-language replies and gently bridge to target language.\n"
+            "- Do not repeat the same coach sentence from the recent context.\n"
+            "- Do not invent story context not present in transcript or selected subject.\n"
             "- If Persona instructions define a character identity, stay in that identity and never rename yourself.\n"
             "- Keep messages concise and natural."
         )
         user_prompt = (
             f"Target language: {target_language}\n"
+            f"Native language: {native_language or 'Unknown'}\n"
+            f"Learner level: {normalized_level}\n"
             f"Subject: {subject}\n"
             f"Persona instructions: {persona}\n"
+            f"Level instructions: {level_instructions}\n"
+            f"Need native translation in response_translation: {str(needs_translation).lower()}\n"
             f"ASR confidence band: {confidence_band}\n"
+            f"Recent turns:\n{context_block}\n"
             f"Learner transcript: {transcript}\n"
             "Return strictly valid JSON."
         )
@@ -2324,6 +3119,7 @@ class CoachService:
         quick_recast = str(parsed.get("quick_recast") or "").strip()
         needs_confirmation = bool(parsed.get("needs_confirmation"))
         confirmation_text = str(parsed.get("confirmation_text") or "").strip()
+        response_translation = str(parsed.get("response_translation") or "").strip()
         if not reply:
             reply = "Good start. Keep going."
         return {
@@ -2332,6 +3128,7 @@ class CoachService:
             "quick_recast": quick_recast,
             "needs_confirmation": needs_confirmation,
             "confirmation_text": confirmation_text,
+            "response_translation": response_translation,
         }, elapsed_ms
 
     async def _coach_with_model(
@@ -2348,6 +3145,12 @@ class CoachService:
     ) -> tuple[dict, int]:
         subject = str(focus_area or "").strip()
         persona = str(persona_style or "").strip()
+        normalized_level = self._normalize_learner_level(cefr_level)
+        level_instructions = self._coaching_level_instructions(normalized_level)
+        needs_translation = self._should_attach_translation(
+            target_language=target_language,
+            native_language=native_language,
+        )
         recent_context: List[str] = []
         for turn in list(recent_turns or [])[-3:]:
             learner = str(turn.transcript or "").strip()
@@ -2359,25 +3162,33 @@ class CoachService:
         context_block = "\n".join(recent_context) if recent_context else "No prior turns."
 
         system_prompt = (
-            "You are a strict language coach running a live conversation drill. Return JSON only.\n"
+            "You are an adaptive language coach running a live conversation drill. Return JSON only.\n"
             "Requirements:\n"
             "1) Always include fields: reply (string), follow_up_question (string), score (0-100 integer), mistakes (array).\n"
-            "2) follow_up_question must be one short question that keeps the learner talking in the target language.\n"
+            "2) follow_up_question must be one short question that keeps the learner talking.\n"
             "3) The follow_up_question must stay on the selected subject when provided.\n"
             "4) Avoid repeating the exact previous coach question.\n"
             "5) Include correction and explanation only if needed.\n"
             "6) explanation must be bilingual: target language first, native language second.\n"
             "7) mistakes must include category, detail, severity, suggestion.\n"
             "8) Keep a consistent speaking style based on Persona instructions when provided.\n"
-            "9) When learner grammar is clearly wrong, begin reply with a brief natural recast correction, then continue.\n"
+            "9) When learner grammar is clearly wrong, begin reply with a direct recast correction in target language.\n"
             "10) If Persona instructions define a character identity, stay in that identity and never rename yourself.\n"
+            "11) Do not invent facts or scenario details that the learner did not say.\n"
+            "12) Keep the learner comfortable and positive; do not shame or mock.\n"
+            "13) If learner is confused, simplify and steer gently.\n"
+            "14) Add field response_translation (string). If native language is supported and different from target, translate your full coach message (reply + follow_up_question) into native language.\n"
+            "15) If learner asks a direct question, answer it directly first, then ask one follow-up.\n"
+            "16) Do not repeatedly say you did not understand unless the learner input is empty.\n"
         )
         user_prompt = (
             f"Target language: {target_language}\n"
             f"Native language: {native_language or 'Unknown'}\n"
-            f"CEFR level: {cefr_level}\n"
+            f"Learner level: {normalized_level}\n"
+            f"Level instructions: {level_instructions}\n"
             f"Subject: {subject or 'General conversation'}\n"
             f"Persona instructions: {persona or 'Default coach'}\n"
+            f"Need native translation in response_translation: {str(needs_translation).lower()}\n"
             f"Recent turns:\n{context_block}\n"
             f"Transcript: {transcript}\n"
             "Return strictly valid JSON."
@@ -2435,6 +3246,7 @@ class CoachService:
             "score": score,
             "correction": parsed.get("correction"),
             "explanation": parsed.get("explanation"),
+            "response_translation": str(parsed.get("response_translation") or "").strip(),
             "mistakes": mistakes,
         }
         return result, elapsed_ms
@@ -2540,6 +3352,7 @@ class CoachService:
                 "type": "score",
                 "turn_id": turn_id,
                 "value": None,
+                "model_id": "asr-no-speech",
             }
             return
 
@@ -2569,6 +3382,9 @@ class CoachService:
         full_coaching_result: Optional[dict[str, Any]] = None
         fast_latency_ms: Optional[int] = None
         full_latency_ms: Optional[int] = None
+        last_coach_reply = ""
+        if session.turns:
+            last_coach_reply = str(session.turns[-1].reply or "").strip()
         two_pass_enabled = bool(
             str(
                 os.environ.get("COACH_ENABLE_TWO_PASS_VOICE", str(settings.COACH_ENABLE_TWO_PASS_VOICE))
@@ -2582,7 +3398,10 @@ class CoachService:
                         model=model,
                         transcript=transcript,
                         target_language=session.target_language,
+                        native_language=session.native_language,
+                        learner_level=session.cefr_level,
                         focus_area=session.focus_area,
+                        recent_turns=session.turns,
                         persona_style=persona_style,
                         asr_confidence_band=asr_confidence_band,
                     )
@@ -2601,6 +3420,27 @@ class CoachService:
                     fast_output = fast_reply
                     if fast_follow_up and fast_follow_up not in fast_reply:
                         fast_output = f"{fast_reply.rstrip()} {fast_follow_up}".strip()
+                    fast_output = self._append_native_translation(
+                        message=fast_output,
+                        translation=str(fast_result.get("response_translation") or "").strip(),
+                        target_language=session.target_language,
+                        native_language=session.native_language,
+                    )
+                    fast_output = self._apply_direct_question_guard(
+                        transcript=transcript,
+                        candidate_reply=fast_output,
+                        target_language=session.target_language,
+                        persona_style=persona_style,
+                    )
+                    fast_output = self._prevent_repeat_loop(
+                        candidate_reply=fast_output,
+                        last_coach_reply=last_coach_reply,
+                        target_language=session.target_language,
+                        native_language=session.native_language,
+                        learner_level=session.cefr_level,
+                        focus_area=session.focus_area,
+                        learner_transcript=transcript,
+                    )
                     if fast_output:
                         yield {
                             "type": "coach_reply",
@@ -2659,6 +3499,9 @@ class CoachService:
         if full_coaching_result is None:
             full_coaching_result = self._fallback_coaching(
                 transcript,
+                target_language=session.target_language,
+                native_language=session.native_language,
+                learner_level=session.cefr_level,
                 focus_area=session.focus_area,
                 persona_style=persona_style,
             )
@@ -2667,12 +3510,44 @@ class CoachService:
 
         follow_up_question = str((fast_coaching_result or {}).get("follow_up_question") or "").strip()
         reply_text = str((fast_coaching_result or {}).get("reply") or "").strip()
+        full_mistakes = list(full_coaching_result.get("mistakes") or [])
         if not reply_text:
             follow_up_question = str(full_coaching_result.get("follow_up_question") or "").strip()
             reply_text = str(full_coaching_result.get("reply") or "").strip()
         final_reply = reply_text
         if follow_up_question and follow_up_question not in reply_text:
             final_reply = f"{reply_text.rstrip()} {follow_up_question}".strip()
+        final_reply = self._prepend_explicit_recast(
+            reply=final_reply,
+            correction=str(full_coaching_result.get("correction") or "").strip() or None,
+            mistakes=full_mistakes,
+            confidence_band=asr_confidence_band,
+        )
+        final_reply = self._apply_direct_question_guard(
+            transcript=transcript,
+            candidate_reply=final_reply,
+            target_language=session.target_language,
+            persona_style=persona_style,
+        )
+        final_reply = self._append_native_translation(
+            message=final_reply,
+            translation=str(
+                full_coaching_result.get("response_translation")
+                or (fast_coaching_result or {}).get("response_translation")
+                or ""
+            ).strip(),
+            target_language=session.target_language,
+            native_language=session.native_language,
+        )
+        final_reply = self._prevent_repeat_loop(
+            candidate_reply=final_reply,
+            last_coach_reply=last_coach_reply,
+            target_language=session.target_language,
+            native_language=session.native_language,
+            learner_level=session.cefr_level,
+            focus_area=session.focus_area,
+            learner_transcript=transcript,
+        )
 
         if not fast_coaching_result:
             yield {
@@ -2725,7 +3600,7 @@ class CoachService:
             model_id=selected_model,
             latency_ms=combined_latency_ms,
             mistakes=(
-                list(full_coaching_result.get("mistakes") or [])
+                full_mistakes
                 + ([forced_uncertain_mistake] if forced_uncertain_mistake else [])
             ),
         )
@@ -2757,6 +3632,7 @@ class CoachService:
             "type": "score",
             "turn_id": turn_id,
             "value": saved_turn.score,
+            "model_id": selected_model,
         }
 
     async def process_text_turn(
@@ -2789,6 +3665,9 @@ class CoachService:
                 candidates = [normalized_model] + [candidate for candidate in candidates if candidate != normalized_model]
 
         selected_model = candidates[0]
+        last_coach_reply = ""
+        if session.turns:
+            last_coach_reply = str(session.turns[-1].reply or "").strip()
         coaching_result: Optional[dict[str, Any]] = None
         latency_ms: Optional[int] = None
         for model in candidates:
@@ -2814,6 +3693,9 @@ class CoachService:
         if coaching_result is None:
             coaching_result = self._fallback_coaching(
                 transcript,
+                target_language=session.target_language,
+                native_language=session.native_language,
+                learner_level=session.cefr_level,
                 focus_area=session.focus_area,
                 persona_style=persona_style,
             )
@@ -2834,6 +3716,33 @@ class CoachService:
         final_reply = reply_text
         if follow_up_question and follow_up_question not in reply_text:
             final_reply = f"{reply_text.rstrip()} {follow_up_question}".strip()
+        final_reply = self._prepend_explicit_recast(
+            reply=final_reply,
+            correction=str(coaching_result.get("correction") or "").strip() or None,
+            mistakes=merged_mistakes,
+            confidence_band="high",
+        )
+        final_reply = self._apply_direct_question_guard(
+            transcript=transcript,
+            candidate_reply=final_reply,
+            target_language=session.target_language,
+            persona_style=persona_style,
+        )
+        final_reply = self._append_native_translation(
+            message=final_reply,
+            translation=str(coaching_result.get("response_translation") or "").strip(),
+            target_language=session.target_language,
+            native_language=session.native_language,
+        )
+        final_reply = self._prevent_repeat_loop(
+            candidate_reply=final_reply,
+            last_coach_reply=last_coach_reply,
+            target_language=session.target_language,
+            native_language=session.native_language,
+            learner_level=session.cefr_level,
+            focus_area=session.focus_area,
+            learner_transcript=transcript,
+        )
         explanation = str(coaching_result.get("explanation") or "").strip()
         if lt_findings:
             lt_hint = f"LanguageTool flagged {len(lt_findings)} additional rule-based issue(s)."

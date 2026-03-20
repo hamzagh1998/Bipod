@@ -1,10 +1,13 @@
 FROM python:3.11-slim
+ARG TORCH_VERSION=2.5.1
+ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cpu
 
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 ENV MODELSCOPE_CACHE=/app/data/modelscope
 
 RUN apt-get update && apt-get install -y \
+    build-essential \
     git \
     ffmpeg \
     espeak-ng \
@@ -15,21 +18,28 @@ WORKDIR /app
 COPY cosyvoice/requirements.txt /tmp/requirements.txt
 RUN pip install --no-cache-dir --upgrade pip \
     && pip install --no-cache-dir -r /tmp/requirements.txt \
-    && pip install --no-cache-dir torch==2.5.1 torchaudio==2.5.1 --index-url https://download.pytorch.org/whl/cpu \
+    && pip install --no-cache-dir torch==${TORCH_VERSION} torchaudio==${TORCH_VERSION} --index-url ${TORCH_INDEX_URL} \
     && git clone --depth 1 --recurse-submodules --shallow-submodules https://github.com/FunAudioLLM/CosyVoice.git /opt/CosyVoice \
     && pip install --no-cache-dir \
       setuptools \
       wheel \
       tqdm \
       hyperpyyaml \
-      matcha-tts \
       modelscope \
       onnxruntime \
       inflect \
       librosa \
       soundfile \
       omegaconf \
+      hydra-core \
+      lightning \
       transformers \
+      diffusers \
+      pyarrow \
+      pyworld \
+      gdown \
+      wget \
+      matplotlib \
       conformer \
       openai-whisper
 

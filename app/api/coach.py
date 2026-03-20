@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any, AsyncIterator, Dict, Optional
 from uuid import UUID
@@ -31,6 +32,8 @@ _ALLOWED_STREAM_EVENT_TYPES = {
     "error",
     "model_fallback",
 }
+_SESSION_TURN_LOCKS: dict[str, asyncio.Lock] = {}
+_SESSION_TURN_LOCKS_GUARD = asyncio.Lock()
 
 
 def _session_not_found(session_id: str) -> HTTPException:
@@ -54,6 +57,18 @@ def _validate_stream_event(event: Any) -> Dict[str, Any]:
     if event_type not in _ALLOWED_STREAM_EVENT_TYPES:
         raise ValueError(f"Unsupported coach stream event type: {event_type}")
     return event
+
+
+async def _session_turn_lock(session_id: str) -> asyncio.Lock:
+    normalized = str(session_id or "").strip()
+    if not normalized:
+        normalized = "unknown"
+    async with _SESSION_TURN_LOCKS_GUARD:
+        lock = _SESSION_TURN_LOCKS.get(normalized)
+        if lock is None:
+            lock = asyncio.Lock()
+            _SESSION_TURN_LOCKS[normalized] = lock
+        return lock
 
 
 def _serialize_session(session) -> dict:
@@ -242,36 +257,38 @@ async def _stream_turn_impl(
     session = await coach_service.get_session(session_id, user_id)
     if not session:
         raise _session_not_found(session_id)
+    turn_lock = await _session_turn_lock(session_id)
 
     async def event_stream() -> AsyncIterator[bytes]:
-        last_event_type: Optional[str] = None
-        try:
-            async for event in coach_service.stream_turn(
-                user_id=user_id,
-                session_id=session_id,
-                audio=audio,
-                transcript_hint=transcript_hint,
-                preferred_model=preferred_model,
-                preferred_asr_model=preferred_asr_model,
-                persona_style=persona_style,
-            ):
-                normalized = _validate_stream_event(event)
-                event_type = str(normalized.pop("type"))
-                last_event_type = event_type
-                yield _encode_ndjson_event(event_type, **normalized)
-                if event_type == "done":
-                    return
-            if last_event_type != "done":
+        async with turn_lock:
+            last_event_type: Optional[str] = None
+            try:
+                async for event in coach_service.stream_turn(
+                    user_id=user_id,
+                    session_id=session_id,
+                    audio=audio,
+                    transcript_hint=transcript_hint,
+                    preferred_model=preferred_model,
+                    preferred_asr_model=preferred_asr_model,
+                    persona_style=persona_style,
+                ):
+                    normalized = _validate_stream_event(event)
+                    event_type = str(normalized.pop("type"))
+                    last_event_type = event_type
+                    yield _encode_ndjson_event(event_type, **normalized)
+                    if event_type == "done":
+                        return
+                if last_event_type != "done":
+                    yield _encode_ndjson_event("done")
+            except ValueError as exc:
+                yield _encode_ndjson_event("error", detail=str(exc), status_code=400)
                 yield _encode_ndjson_event("done")
-        except ValueError as exc:
-            yield _encode_ndjson_event("error", detail=str(exc), status_code=400)
-            yield _encode_ndjson_event("done")
-        except HTTPException as exc:
-            yield _encode_ndjson_event("error", detail=exc.detail, status_code=exc.status_code)
-            yield _encode_ndjson_event("done")
-        except Exception as exc:
-            yield _encode_ndjson_event("error", detail=str(exc), status_code=500)
-            yield _encode_ndjson_event("done")
+            except HTTPException as exc:
+                yield _encode_ndjson_event("error", detail=exc.detail, status_code=exc.status_code)
+                yield _encode_ndjson_event("done")
+            except Exception as exc:
+                yield _encode_ndjson_event("error", detail=str(exc), status_code=500)
+                yield _encode_ndjson_event("done")
 
     return StreamingResponse(
         event_stream(),
@@ -333,14 +350,16 @@ async def text_turn(
     session = await coach_service.get_session(str(payload.session_id), user_id)
     if not session:
         raise _session_not_found(str(payload.session_id))
+    turn_lock = await _session_turn_lock(str(payload.session_id))
     try:
-        return await coach_service.process_text_turn(
-            user_id=user_id,
-            session_id=str(payload.session_id),
-            text=payload.text,
-            preferred_model=payload.preferred_model,
-            persona_style=payload.persona_style,
-        )
+        async with turn_lock:
+            return await coach_service.process_text_turn(
+                user_id=user_id,
+                session_id=str(payload.session_id),
+                text=payload.text,
+                preferred_model=payload.preferred_model,
+                persona_style=payload.persona_style,
+            )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -357,6 +376,7 @@ async def synthesize_tts(
             voice_preset=payload.voice_preset,
             persona_style=payload.persona_style,
             tts_provider=payload.tts_provider,
+            preferred_model=payload.preferred_model,
             voice_mode=payload.voice_mode,
             voice_profile_id=payload.voice_profile_id,
             reference_clip_id=payload.reference_clip_id,
@@ -381,20 +401,33 @@ async def synthesize_tts(
 @router.get("/tts/status")
 async def tts_status(
     warm: bool = False,
+    preferred_model: Optional[str] = None,
+    preferred_tts_provider: Optional[str] = None,
     user_id: int = Depends(auth_service.get_current_user),
 ):
     _ = user_id
-    return await coach_service.get_tts_status(warm=warm)
+    return await coach_service.get_tts_status(
+        warm=warm,
+        preferred_model=preferred_model,
+        preferred_tts_provider=preferred_tts_provider,
+    )
 
 
 @router.get("/runtime/status")
 async def runtime_status(
     warm: bool = False,
     mode: Optional[str] = None,
+    preferred_model: Optional[str] = None,
+    preferred_tts_provider: Optional[str] = None,
     user_id: int = Depends(auth_service.get_current_user),
 ):
     _ = user_id
-    return await coach_service.get_runtime_status(warm=warm, mode=mode)
+    return await coach_service.get_runtime_status(
+        warm=warm,
+        mode=mode,
+        preferred_model=preferred_model,
+        preferred_tts_provider=preferred_tts_provider,
+    )
 
 
 @router.post("/runtime/preload")

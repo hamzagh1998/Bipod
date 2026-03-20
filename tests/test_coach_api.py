@@ -325,6 +325,7 @@ def test_coach_tts_endpoint_returns_audio(monkeypatch):
         voice_preset,
         persona_style=None,
         tts_provider=None,
+        preferred_model=None,
         voice_mode=None,
         voice_profile_id=None,
         reference_clip_id=None,
@@ -336,6 +337,7 @@ def test_coach_tts_endpoint_returns_audio(monkeypatch):
         captured["voice_preset"] = voice_preset
         captured["persona_style"] = persona_style
         captured["tts_provider"] = tts_provider
+        captured["preferred_model"] = preferred_model
         captured["voice_mode"] = voice_mode
         captured["voice_profile_id"] = voice_profile_id
         captured["reference_clip_id"] = reference_clip_id
@@ -353,6 +355,7 @@ def test_coach_tts_endpoint_returns_audio(monkeypatch):
                 voice_preset="anby",
                 persona_style="Anby",
                 tts_provider="cosyvoice",
+                preferred_model="qwen3:8b",
                 voice_mode="preset",
             ),
             user_id=3,
@@ -365,6 +368,7 @@ def test_coach_tts_endpoint_returns_audio(monkeypatch):
         "voice_preset": "anby",
         "persona_style": "Anby",
         "tts_provider": "cosyvoice",
+        "preferred_model": "qwen3:8b",
         "voice_mode": "preset",
         "voice_profile_id": None,
         "reference_clip_id": None,
@@ -378,8 +382,10 @@ def test_coach_tts_endpoint_returns_audio(monkeypatch):
 def test_coach_tts_status_endpoint(monkeypatch):
     captured = {}
 
-    async def fake_get_tts_status(*, warm):
+    async def fake_get_tts_status(*, warm, preferred_model=None, preferred_tts_provider=None):
         captured["warm"] = warm
+        captured["preferred_model"] = preferred_model
+        captured["preferred_tts_provider"] = preferred_tts_provider
         return {
             "ok": True,
             "engine": "cosyvoice",
@@ -395,9 +401,20 @@ def test_coach_tts_status_endpoint(monkeypatch):
 
     monkeypatch.setattr(coach_module.coach_service, "get_tts_status", fake_get_tts_status)
 
-    payload = asyncio.run(coach_module.tts_status(warm=True, user_id=3))
+    payload = asyncio.run(
+        coach_module.tts_status(
+            warm=True,
+            preferred_model="qwen3:8b",
+            preferred_tts_provider="openvoice",
+            user_id=3,
+        )
+    )
 
-    assert captured == {"warm": True}
+    assert captured == {
+        "warm": True,
+        "preferred_model": "qwen3:8b",
+        "preferred_tts_provider": "openvoice",
+    }
     assert payload["engine"] == "cosyvoice"
     assert payload["ready"] is False
     assert payload["state"] == "downloading"
@@ -406,8 +423,13 @@ def test_coach_tts_status_endpoint(monkeypatch):
 def test_coach_runtime_endpoints(monkeypatch):
     captured = {}
 
-    async def fake_get_runtime_status(*, warm, mode):
-        captured["status"] = {"warm": warm, "mode": mode}
+    async def fake_get_runtime_status(*, warm, mode, preferred_model=None, preferred_tts_provider=None):
+        captured["status"] = {
+            "warm": warm,
+            "mode": mode,
+            "preferred_model": preferred_model,
+            "preferred_tts_provider": preferred_tts_provider,
+        }
         return {"ok": True, "ready": False, "mode": mode or "voice", "state": "warming", "components": {}}
 
     async def fake_preload_runtime(*, mode):
@@ -417,7 +439,15 @@ def test_coach_runtime_endpoints(monkeypatch):
     monkeypatch.setattr(coach_module.coach_service, "get_runtime_status", fake_get_runtime_status)
     monkeypatch.setattr(coach_module.coach_service, "preload_runtime", fake_preload_runtime)
 
-    status_payload = asyncio.run(coach_module.runtime_status(warm=True, mode="text", user_id=3))
+    status_payload = asyncio.run(
+        coach_module.runtime_status(
+            warm=True,
+            mode="text",
+            preferred_model="llama3.2:3b",
+            preferred_tts_provider="openvoice",
+            user_id=3,
+        )
+    )
     preload_payload = asyncio.run(
         coach_module.runtime_preload(
             payload=coach_module.CoachRuntimePreloadRequest(mode="voice"),
@@ -425,7 +455,12 @@ def test_coach_runtime_endpoints(monkeypatch):
         )
     )
 
-    assert captured["status"] == {"warm": True, "mode": "text"}
+    assert captured["status"] == {
+        "warm": True,
+        "mode": "text",
+        "preferred_model": "llama3.2:3b",
+        "preferred_tts_provider": "openvoice",
+    }
     assert captured["preload"] == {"mode": "voice"}
     assert status_payload["state"] == "warming"
     assert preload_payload["state"] == "ready"

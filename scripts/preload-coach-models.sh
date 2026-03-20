@@ -35,7 +35,7 @@ mark_step_done() {
 }
 
 echo "[coach-preload] Building coach images (installs runtime packages)..."
-docker compose build bipod-app cosyvoice
+docker compose build bipod-app cosyvoice openvoice
 
 detect_gpu_vram_gb() {
   if ! command -v nvidia-smi >/dev/null 2>&1; then
@@ -241,10 +241,13 @@ PY
 fi
 
 echo "[coach-preload] Starting services with preloaded artifacts..."
-docker compose up -d bipod-app cosyvoice languagetool ollama
+docker compose up -d bipod-app cosyvoice openvoice languagetool ollama
 
 echo "[coach-preload] Triggering CosyVoice warmup..."
 curl -sS "http://localhost:5001/status?warm=true" >/dev/null || true
+
+echo "[coach-preload] Triggering OpenVoice warmup..."
+curl -sS "http://localhost:5002/status?warm=true" >/dev/null || true
 
 echo "[coach-preload] Checking LanguageTool readiness..."
 LT_OK="0"

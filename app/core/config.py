@@ -192,7 +192,7 @@ class Settings(BaseSettings):
     COACH_WHISPER_LOCAL_FILES_ONLY: bool = True
     COACH_WHISPER_DEVICE: str = "auto"  # auto | cpu | cuda
     COACH_WHISPER_COMPUTE_TYPE: str = ""  # empty -> infer from device
-    COACH_TTS_PROVIDER: str = "espeak"  # espeak | cosyvoice
+    COACH_TTS_PROVIDER: str = "espeak"  # espeak | cosyvoice | openvoice
     COACH_TTS_ALLOW_ESPEAK_FALLBACK: bool = True
     COACH_COSYVOICE_BASE_URL: str = "http://cosyvoice:5001"
     COACH_COSYVOICE_MODEL_ID: str = "iic/CosyVoice-300M"
@@ -200,6 +200,12 @@ class Settings(BaseSettings):
     COACH_COSYVOICE_LOCAL_FILES_ONLY: bool = True
     COACH_COSYVOICE_DOWNLOAD_ROOT: str = "/app/data/huggingface/hub"
     COACH_COSYVOICE_TIMEOUT_SEC: int = 1800
+    COACH_OPENVOICE_BASE_URL: str = "http://openvoice:5002"
+    COACH_OPENVOICE_MODEL_ID: str = "openvoice-v2"
+    COACH_OPENVOICE_DEVICE: str = "auto"  # auto | cpu | cuda
+    COACH_OPENVOICE_LOCAL_FILES_ONLY: bool = False
+    COACH_OPENVOICE_DOWNLOAD_ROOT: str = "/app/data/openvoice"
+    COACH_OPENVOICE_TIMEOUT_SEC: int = 1800
     COACH_VOICE_SECRET_KEY: str = ""
     COACH_VOICE_LIBRARY_DIR: str = "/app/data/coach_voice_library"
     COACH_LANGUAGETOOL_ENABLED: bool = False
@@ -209,6 +215,7 @@ class Settings(BaseSettings):
     COACH_OLLAMA_KEEPALIVE: str = "15m"
     COACH_RUNTIME_PROFILE: str = "auto"  # auto | cpu | gpu_constrained | gpu_full
     COACH_HIGH_VRAM_THRESHOLD_GB: float = 16.0
+    COACH_ALLOCATION_POLICY: str = "auto_balance"  # auto_balance | prioritize_llm | prioritize_tts
 
     # Ollama runtime tuning
     OLLAMA_NUM_CTX: int | None = None

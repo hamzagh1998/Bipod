@@ -172,6 +172,30 @@ class CosyVoiceRuntime:
         payload = np.asarray(payload, dtype=np.float32)
         return payload, sample_rate
 
+    def _merge_outputs(self, outputs: list[Any]) -> tuple[np.ndarray, int]:
+        chunks: list[np.ndarray] = []
+        sample_rate: Optional[int] = None
+        for item in outputs:
+            samples, chunk_sample_rate = self._extract_audio(item)
+            normalized = np.asarray(samples, dtype=np.float32).flatten()
+            if not normalized.size:
+                continue
+            if sample_rate is None:
+                sample_rate = int(chunk_sample_rate)
+            elif int(chunk_sample_rate) != int(sample_rate):
+                logger.debug(
+                    "Skipping CosyVoice chunk with mismatched sample_rate=%s (expected=%s)",
+                    chunk_sample_rate,
+                    sample_rate,
+                )
+                continue
+            chunks.append(normalized)
+        if not chunks:
+            raise RuntimeError("CosyVoice inference returned empty audio chunks.")
+        if len(chunks) == 1:
+            return chunks[0], int(sample_rate or 22050)
+        return np.concatenate(chunks), int(sample_rate or 22050)
+
     def _init_model(self, requested_model_id: Optional[str], runtime_device: Optional[str] = None) -> bool:
         with self._init_lock:
             model_id = str(requested_model_id or os.environ.get("COACH_COSYVOICE_MODEL_ID") or "").strip()
@@ -393,19 +417,68 @@ class CosyVoiceRuntime:
                 reference_path = self._convert_reference_to_wav(reference_audio_bytes)
 
             outputs = None
-            if voice_mode in {"cloned_profile", "cloned_session"} and reference_path and hasattr(self._model, "inference_zero_shot"):
-                trial_kwargs = [
-                    {"tts_text": text, "prompt_text": "", "prompt_wav": str(reference_path), "stream": False},
-                    {"text": text, "prompt_text": "", "prompt_wav": str(reference_path), "stream": False},
-                ]
-                for kwargs in trial_kwargs:
-                    try:
-                        outputs = list(self._model.inference_zero_shot(**kwargs))
-                        if outputs:
-                            break
-                    except Exception:
-                        logger.debug("CosyVoice zero-shot kwargs failed: %s", kwargs)
-                        continue
+            if voice_mode in {"cloned_profile", "cloned_session"} and reference_path:
+                # Prefer cross-lingual cloning for reference-audio voices. It does not
+                # rely on prompt transcript text and is more stable for custom samples.
+                if hasattr(self._model, "inference_cross_lingual"):
+                    cross_lingual_kwargs = [
+                        {"tts_text": text, "prompt_wav": str(reference_path), "stream": False},
+                        {"text": text, "prompt_wav": str(reference_path), "stream": False},
+                    ]
+                    for kwargs in cross_lingual_kwargs:
+                        try:
+                            outputs = list(self._model.inference_cross_lingual(**kwargs))
+                            if outputs:
+                                break
+                        except Exception:
+                            logger.debug("CosyVoice cross-lingual kwargs failed: %s", kwargs)
+                            continue
+
+                # Keep zero-shot as a compatibility fallback.
+                if outputs is None and hasattr(self._model, "inference_zero_shot"):
+                    prompt_text = str(os.environ.get("COACH_COSYVOICE_PROMPT_TEXT") or "").strip()
+                    zero_shot_kwargs = []
+                    if prompt_text:
+                        zero_shot_kwargs.extend(
+                            [
+                                {
+                                    "tts_text": text,
+                                    "prompt_text": prompt_text,
+                                    "prompt_wav": str(reference_path),
+                                    "stream": False,
+                                },
+                                {
+                                    "text": text,
+                                    "prompt_text": prompt_text,
+                                    "prompt_wav": str(reference_path),
+                                    "stream": False,
+                                },
+                            ]
+                        )
+                    zero_shot_kwargs.extend(
+                        [
+                            {
+                                "tts_text": text,
+                                "prompt_text": "",
+                                "prompt_wav": str(reference_path),
+                                "stream": False,
+                            },
+                            {
+                                "text": text,
+                                "prompt_text": "",
+                                "prompt_wav": str(reference_path),
+                                "stream": False,
+                            },
+                        ]
+                    )
+                    for kwargs in zero_shot_kwargs:
+                        try:
+                            outputs = list(self._model.inference_zero_shot(**kwargs))
+                            if outputs:
+                                break
+                        except Exception:
+                            logger.debug("CosyVoice zero-shot kwargs failed: %s", kwargs)
+                            continue
 
             if outputs is None and hasattr(self._model, "inference_sft"):
                 trial_kwargs = [
@@ -424,7 +497,7 @@ class CosyVoiceRuntime:
             if not outputs:
                 raise RuntimeError("CosyVoice inference returned no audio.")
 
-            samples, sample_rate = self._extract_audio(outputs[0])
+            samples, sample_rate = self._merge_outputs(outputs)
             return self._to_wav_bytes(samples=samples, sample_rate=sample_rate)
         finally:
             if reference_path is not None:

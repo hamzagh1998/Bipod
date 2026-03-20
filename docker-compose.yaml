@@ -3,6 +3,9 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.cosyvoice
+      args:
+        TORCH_VERSION: ${COACH_COSYVOICE_TORCH_VERSION:-2.5.1}
+        TORCH_INDEX_URL: ${COACH_COSYVOICE_TORCH_INDEX_URL:-https://download.pytorch.org/whl/cpu}
     container_name: bipod_cosyvoice
     restart: unless-stopped
     ports:
@@ -18,6 +21,36 @@ services:
       - COACH_COSYVOICE_DOWNLOAD_ROOT=/app/data/modelscope
       - COACH_RUNTIME_PROFILE=${COACH_RUNTIME_PROFILE:-auto}
       - COACH_HIGH_VRAM_THRESHOLD_GB=${COACH_HIGH_VRAM_THRESHOLD_GB:-16}
+      - COACH_ALLOCATION_POLICY=${COACH_ALLOCATION_POLICY:-auto_balance}
+      - COACH_VOICE_LIBRARY_DIR=/app/data/coach_voice_library
+    volumes:
+      - ./data:/app/data
+      - ./cosyvoice/assets:/app/data/coach_voice_library:ro
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  openvoice:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.openvoice
+      args:
+        TORCH_VERSION: ${COACH_OPENVOICE_TORCH_VERSION:-2.5.1}
+        TORCH_INDEX_URL: ${COACH_OPENVOICE_TORCH_INDEX_URL:-https://download.pytorch.org/whl/cpu}
+    container_name: bipod_openvoice
+    restart: unless-stopped
+    ports:
+      - "5002:5002"
+    environment:
+      - COACH_OPENVOICE_MODEL_ID=${COACH_OPENVOICE_MODEL_ID:-openvoice-v2}
+      - COACH_OPENVOICE_DEVICE=${COACH_OPENVOICE_DEVICE:-auto}
+      - COACH_OPENVOICE_LOCAL_FILES_ONLY=${COACH_OPENVOICE_LOCAL_FILES_ONLY:-false}
+      - COACH_OPENVOICE_DOWNLOAD_ROOT=${COACH_OPENVOICE_DOWNLOAD_ROOT:-/app/data/openvoice}
+      - COACH_OPENVOICE_CHECKPOINTS_URL=${COACH_OPENVOICE_CHECKPOINTS_URL:-}
       - COACH_VOICE_LIBRARY_DIR=/app/data/coach_voice_library
     volumes:
       - ./data:/app/data
@@ -88,6 +121,7 @@ services:
     restart: unless-stopped
     depends_on:
       - cosyvoice
+      - openvoice
       - ollama
       - imagine
       - languagetool
@@ -117,8 +151,15 @@ services:
       - COACH_COSYVOICE_LOCAL_FILES_ONLY=${COACH_COSYVOICE_LOCAL_FILES_ONLY:-true}
       - COACH_COSYVOICE_DOWNLOAD_ROOT=/app/data/huggingface/hub
       - COACH_COSYVOICE_TIMEOUT_SEC=${COACH_COSYVOICE_TIMEOUT_SEC:-1800}
+      - COACH_OPENVOICE_BASE_URL=http://openvoice:5002
+      - COACH_OPENVOICE_MODEL_ID=${COACH_OPENVOICE_MODEL_ID:-openvoice-v2}
+      - COACH_OPENVOICE_DEVICE=${COACH_OPENVOICE_DEVICE:-auto}
+      - COACH_OPENVOICE_LOCAL_FILES_ONLY=${COACH_OPENVOICE_LOCAL_FILES_ONLY:-false}
+      - COACH_OPENVOICE_DOWNLOAD_ROOT=${COACH_OPENVOICE_DOWNLOAD_ROOT:-/app/data/openvoice}
+      - COACH_OPENVOICE_TIMEOUT_SEC=${COACH_OPENVOICE_TIMEOUT_SEC:-1800}
       - COACH_RUNTIME_PROFILE=${COACH_RUNTIME_PROFILE:-auto}
       - COACH_HIGH_VRAM_THRESHOLD_GB=${COACH_HIGH_VRAM_THRESHOLD_GB:-16}
+      - COACH_ALLOCATION_POLICY=${COACH_ALLOCATION_POLICY:-auto_balance}
       - COACH_VOICE_LIBRARY_DIR=/app/data/coach_voice_library
       - COACH_LANGUAGETOOL_ENABLED=${COACH_LANGUAGETOOL_ENABLED:-false}
       - COACH_LANGUAGETOOL_BASE_URL=http://languagetool:8010

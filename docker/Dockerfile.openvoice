@@ -1,0 +1,43 @@
+FROM python:3.11-slim
+ARG TORCH_VERSION=2.5.1
+ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cpu
+
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    git \
+    pkg-config \
+    ffmpeg \
+    libavcodec-dev \
+    libavdevice-dev \
+    libavfilter-dev \
+    libavformat-dev \
+    libavutil-dev \
+    libswresample-dev \
+    libswscale-dev \
+    espeak-ng \
+    libsndfile1 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY openvoice_sidecar/requirements.txt /tmp/requirements.txt
+RUN pip install --no-cache-dir --upgrade pip \
+    && pip install --no-cache-dir -r /tmp/requirements.txt \
+    && pip install --no-cache-dir torch==${TORCH_VERSION} torchaudio==${TORCH_VERSION} --index-url ${TORCH_INDEX_URL} \
+    && pip install --no-cache-dir git+https://github.com/myshell-ai/MeloTTS.git@main \
+    && pip install --no-cache-dir --no-deps git+https://github.com/myshell-ai/OpenVoice.git@main
+
+RUN ln -sfn /usr/local/lib/python3.11/site-packages/unidic_lite/dicdir \
+      /usr/local/lib/python3.11/site-packages/unidic/dicdir
+
+ENV MECABRC=/usr/local/lib/python3.11/site-packages/unidic_lite/dicdir/mecabrc
+
+COPY openvoice_sidecar/server.py /app/server.py
+COPY cosyvoice/assets /app/data/coach_voice_library
+
+EXPOSE 5002
+
+CMD ["uvicorn", "server:app", "--host", "0.0.0.0", "--port", "5002"]
