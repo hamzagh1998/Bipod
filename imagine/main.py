@@ -38,13 +38,14 @@ app = FastAPI(title="Bipod Imagine Service")
 # Global Pipeline State
 # ---------------------------------------------------------------------------
 
-txt2img_pipe  = None
-img2img_pipe  = None
+txt2img_pipe = None
+img2img_pipe = None
 current_model_id = None
 
 # ---------------------------------------------------------------------------
 # Request Models
 # ---------------------------------------------------------------------------
+
 
 class GenerateRequest(BaseModel):
     prompt: str
@@ -54,12 +55,12 @@ class GenerateRequest(BaseModel):
         "worst quality, (disfigured, ugly, bad anatomy, bad proportions), "
         "watermark, text, sign, profile, logo, 3d render"
     )
-    steps: int           = Field(default=4,    ge=1,   le=100)
-    strength: float      = Field(default=0.6,  ge=0.0, le=1.0)
+    steps: int = Field(default=4, ge=1, le=100)
+    strength: float = Field(default=0.6, ge=0.0, le=1.0)
     guidance_scale: float = Field(default=0.0, ge=0.0, le=20.0)
-    width: int           = Field(default=1024, ge=64,  le=4096)
-    height: int          = Field(default=1024, ge=64,  le=4096)
-    model_type: str      = "sdxl-lightning"
+    width: int = Field(default=1024, ge=64, le=4096)
+    height: int = Field(default=1024, ge=64, le=4096)
+    model_type: str = "sdxl-lightning"
     output_format: Literal["jpeg", "png", "webp"] = "jpeg"
 
     @validator("image")
@@ -90,23 +91,23 @@ class UpscaleRequest(BaseModel):
 # Configuration
 # ---------------------------------------------------------------------------
 
-HF_HOME      = os.environ.get("HF_HOME", "/app/models")
+HF_HOME = os.environ.get("HF_HOME", "/app/models")
 OFFLINE_MODE = os.environ.get("OFFLINE_MODE", "true").lower() == "true"
 
 # Option B — single source of truth for model_type → repo_id
 # Removed: sdxl-turbo, sdxl-base (redundant given Lightning + Flux)
 MODEL_REPO_MAP = {
-    "dalle-mini":       "segmind/tiny-sd",
+    "dalle-mini": "segmind/tiny-sd",
     "stable-diffusion": "SG161222/Realistic_Vision_V6.0_B1_noVAE",
-    "sdxl-lightning":   "ByteDance/SDXL-Lightning",
-    "juggernaut-xl":    "RunDiffusion/Juggernaut-XL-v9",
-    "flux-schnell":     "black-forest-labs/FLUX.1-schnell",
+    "sdxl-lightning": "ByteDance/SDXL-Lightning",
+    "juggernaut-xl": "RunDiffusion/Juggernaut-XL-v9",
+    "flux-schnell": "black-forest-labs/FLUX.1-schnell",
 }
 SDXL_BASE_REPO = "stabilityai/stable-diffusion-xl-base-1.0"
 SDXL_LIGHTNING_REPO = "ByteDance/SDXL-Lightning"
 SDXL_LIGHTNING_UNET_FILE = "sdxl_lightning_4step_unet.safetensors"
 
-FLUX_MIN_VRAM_GB = 8.0
+FLUX_MIN_VRAM_GB = 5.0
 SDXL_LIGHTNING_NATIVE_EDGE = 1024
 REALESRGAN_MODEL_FILENAME = "RealESRGAN_x4plus.pth"
 REALESRGAN_MODEL_URL = (
@@ -132,6 +133,7 @@ OUTPUT_FORMAT_METADATA = {
 # ---------------------------------------------------------------------------
 # Device & VRAM Utilities
 # ---------------------------------------------------------------------------
+
 
 def get_device() -> str:
     if torch.cuda.is_available():
@@ -165,15 +167,15 @@ def warmup_cuda_context():
 def get_vram_info() -> Optional[dict]:
     if not torch.cuda.is_available():
         return None
-    dev       = torch.cuda.current_device()
-    total     = torch.cuda.get_device_properties(dev).total_memory / (1024 ** 3)
-    allocated = torch.cuda.memory_allocated(dev) / (1024 ** 3)
-    reserved  = torch.cuda.memory_reserved(dev)  / (1024 ** 3)
+    dev = torch.cuda.current_device()
+    total = torch.cuda.get_device_properties(dev).total_memory / (1024**3)
+    allocated = torch.cuda.memory_allocated(dev) / (1024**3)
+    reserved = torch.cuda.memory_reserved(dev) / (1024**3)
     return {
-        "total_gb":     round(total, 2),
+        "total_gb": round(total, 2),
         "allocated_gb": round(allocated, 2),
-        "reserved_gb":  round(reserved, 2),
-        "free_gb":      round(total - reserved, 2),
+        "reserved_gb": round(reserved, 2),
+        "free_gb": round(total - reserved, 2),
     }
 
 
@@ -187,18 +189,23 @@ def get_vram_tier() -> Optional[str]:
     """
     if not torch.cuda.is_available():
         return None
-    total = torch.cuda.get_device_properties(0).total_memory / (1024 ** 3)
-    if total < 5:    return "low"
-    elif total < 8:  return "mid_low"
-    elif total < 12: return "medium"
-    elif total < 18: return "high"
-    else:            return "ultra"
+    total = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+    if total < 5:
+        return "low"
+    elif total < 8:
+        return "mid_low"
+    elif total < 12:
+        return "medium"
+    elif total < 18:
+        return "high"
+    else:
+        return "ultra"
 
 
 def get_total_vram_gb() -> float:
     if not torch.cuda.is_available():
         return 0.0
-    return torch.cuda.get_device_properties(0).total_memory / (1024 ** 3)
+    return torch.cuda.get_device_properties(0).total_memory / (1024**3)
 
 
 def get_optimal_resolution(vram_tier: Optional[str], is_xl: bool) -> tuple[int, int]:
@@ -207,30 +214,30 @@ def get_optimal_resolution(vram_tier: Optional[str], is_xl: bool) -> tuple[int, 
         return (512, 512)
     if is_xl:
         return {
-            "low":     (1024, 768),
+            "low": (1024, 768),
             "mid_low": (2048, 1024),
-            "medium":  (3072, 1536),
-            "high":    (4096, 2048),
-            "ultra":   (4096, 2048),
+            "medium": (3072, 1536),
+            "high": (4096, 2048),
+            "ultra": (4096, 2048),
         }.get(vram_tier, (1024, 1024))
     else:
         return {
-            "low":     (768, 512),
+            "low": (768, 512),
             "mid_low": (1536, 768),
-            "medium":  (2048, 1024),
-            "high":    (3072, 1536),
-            "ultra":   (4096, 2048),
+            "medium": (2048, 1024),
+            "high": (3072, 1536),
+            "ultra": (4096, 2048),
         }.get(vram_tier, (512, 512))
 
 
 def get_flux_resolution(vram_tier: Optional[str]) -> tuple[int, int]:
     """Return (width, height) safe for Flux.1 on the given VRAM tier."""
     return {
-        "mid_low": (768,  768),
-        "medium":  (1024, 1024),
-        "high":    (1024, 1024),
-        "ultra":   (1360, 768),
-    }.get(vram_tier or "mid_low", (768, 768))
+        "mid_low": (512, 512),
+        "medium": (768, 768),
+        "high": (1024, 1024),
+        "ultra": (1360, 768),
+    }.get(vram_tier or "mid_low", (512, 512))
 
 
 def get_model_resolution_limits(
@@ -300,7 +307,9 @@ def align_tile_size(size: int, step: int = 64, minimum: int = 192) -> int:
     return max(minimum, (size // step) * step)
 
 
-def recommend_upscale_tile_sizes(device: str, vram_tier: Optional[str], image: Image.Image) -> list[Optional[int]]:
+def recommend_upscale_tile_sizes(
+    device: str, vram_tier: Optional[str], image: Image.Image
+) -> list[Optional[int]]:
     if device != "cuda":
         return [512] if max(image.size) > 1536 else [None]
 
@@ -359,7 +368,9 @@ def recommend_upscale_tile_sizes(device: str, vram_tier: Optional[str], image: I
     return candidates
 
 
-def recommend_realesrgan_tile_sizes(device: str, vram_tier: Optional[str], image: Image.Image) -> list[Optional[int]]:
+def recommend_realesrgan_tile_sizes(
+    device: str, vram_tier: Optional[str], image: Image.Image
+) -> list[Optional[int]]:
     base_candidates = recommend_upscale_tile_sizes(device, vram_tier, image)
     adjusted = []
     for candidate in base_candidates:
@@ -383,7 +394,9 @@ def build_tile_starts(length: int, tile_size: int, stride: int) -> list[int]:
     return starts
 
 
-def _run_swin2sr_forward(model, processor, tile_image: Image.Image, device: str) -> np.ndarray:
+def _run_swin2sr_forward(
+    model, processor, tile_image: Image.Image, device: str
+) -> np.ndarray:
     inputs = processor(tile_image, return_tensors="pt")
     inputs = {
         key: (
@@ -397,10 +410,7 @@ def _run_swin2sr_forward(model, processor, tile_image: Image.Image, device: str)
     with torch.inference_mode():
         outputs = model(**inputs)
 
-    output = (
-        outputs.reconstruction.data.squeeze()
-        .float().cpu().clamp_(0, 1).numpy()
-    )
+    output = outputs.reconstruction.data.squeeze().float().cpu().clamp_(0, 1).numpy()
     output = np.moveaxis(output, 0, -1)
     output = np.nan_to_num(output, nan=0.0, posinf=1.0, neginf=0.0)
     return (output * 255.0).round().astype(np.uint8)
@@ -501,7 +511,13 @@ def run_realesrgan_inference(
     return Image.fromarray(rgb_output.astype(np.uint8))
 
 
-def run_upscale_inference(model, processor, init_image: Image.Image, device: str, tile_size: Optional[int] = None):
+def run_upscale_inference(
+    model,
+    processor,
+    init_image: Image.Image,
+    device: str,
+    tile_size: Optional[int] = None,
+):
     model = model.to(device)
 
     if not tile_size:
@@ -531,7 +547,9 @@ def run_upscale_inference(model, processor, init_image: Image.Image, device: str
             bottom = min(top + tile_size, height)
             right = min(left + tile_size, width)
             tile = init_image.crop((left, top, right, bottom))
-            tile_output = _run_swin2sr_forward(model, processor, tile, device).astype(np.float32)
+            tile_output = _run_swin2sr_forward(model, processor, tile, device).astype(
+                np.float32
+            )
             expected_h = (bottom - top) * scale
             expected_w = (right - left) * scale
             tile_output = tile_output[:expected_h, :expected_w]
@@ -544,8 +562,10 @@ def run_upscale_inference(model, processor, init_image: Image.Image, device: str
                 continue
 
             tile_output = tile_output[:dest_h, :dest_w]
-            accum[out_top:out_top + dest_h, out_left:out_left + dest_w] += tile_output
-            weights[out_top:out_top + dest_h, out_left:out_left + dest_w] += 1.0
+            accum[
+                out_top : out_top + dest_h, out_left : out_left + dest_w
+            ] += tile_output
+            weights[out_top : out_top + dest_h, out_left : out_left + dest_w] += 1.0
 
     output = (accum / np.clip(weights, 1.0, None)).round().astype(np.uint8)
     return Image.fromarray(output)
@@ -559,7 +579,9 @@ def run_upscale_pass(
     vram_tier: Optional[str],
 ) -> tuple[Image.Image, str, Optional[int]]:
     upscale_device = choose_upscale_device(requested_device, vram_tier, init_image)
-    tile_candidates = recommend_upscale_tile_sizes(upscale_device, vram_tier, init_image)
+    tile_candidates = recommend_upscale_tile_sizes(
+        upscale_device, vram_tier, init_image
+    )
     tile_size = tile_candidates[0]
 
     try:
@@ -626,7 +648,9 @@ def run_realesrgan_pass(
     outscale: int,
 ) -> tuple[Image.Image, str, Optional[int]]:
     upscale_device = choose_upscale_device(requested_device, vram_tier, init_image)
-    tile_candidates = recommend_realesrgan_tile_sizes(upscale_device, vram_tier, init_image)
+    tile_candidates = recommend_realesrgan_tile_sizes(
+        upscale_device, vram_tier, init_image
+    )
     tile_size = tile_candidates[0]
 
     try:
@@ -683,7 +707,9 @@ def run_realesrgan_pass(
     return output_image, upscale_device, tile_size
 
 
-def choose_upscale_device(requested_device: str, vram_tier: Optional[str], image: Image.Image) -> str:
+def choose_upscale_device(
+    requested_device: str, vram_tier: Optional[str], image: Image.Image
+) -> str:
     if requested_device != "cuda":
         return requested_device
 
@@ -759,13 +785,16 @@ def find_single_file_checkpoint(snapshot_path: str) -> str:
         if "inpainting" not in os.path.basename(path).lower()
     )
     if not candidates:
-        raise FileNotFoundError(f"No root safetensors checkpoint found in {snapshot_path}")
+        raise FileNotFoundError(
+            f"No root safetensors checkpoint found in {snapshot_path}"
+        )
     return candidates[0]
 
 
 # ---------------------------------------------------------------------------
 # SDXL / SD Pipeline Loader
 # ---------------------------------------------------------------------------
+
 
 def _apply_optimizations(
     pipe,
@@ -797,7 +826,9 @@ def _apply_optimizations(
         pipe.enable_attention_slicing(slice_size="auto")
         logger.info(f"{pfx}✓ Attention slicing enabled")
 
-    offload_fn = pipe.enable_sequential_cpu_offload if use_seq else pipe.enable_model_cpu_offload
+    offload_fn = (
+        pipe.enable_sequential_cpu_offload if use_seq else pipe.enable_model_cpu_offload
+    )
     offload_label = "Sequential" if use_seq else "Model"
     max_retries = 3
     for attempt in range(1, max_retries + 1):
@@ -811,7 +842,11 @@ def _apply_optimizations(
                 logger.warning(
                     "%sCUDA busy during %s offload (attempt %d/%d); "
                     "retrying in %ds...",
-                    pfx, offload_label, attempt, max_retries, wait,
+                    pfx,
+                    offload_label,
+                    attempt,
+                    max_retries,
+                    wait,
                 )
                 aggressive_cleanup()
                 warmup_cuda_context()
@@ -820,7 +855,12 @@ def _apply_optimizations(
                 raise
 
 
-def load_sdxl_pipeline(repo_id: str, device: str, vram_tier: Optional[str], model_type: Optional[str] = None):
+def load_sdxl_pipeline(
+    repo_id: str,
+    device: str,
+    vram_tier: Optional[str],
+    model_type: Optional[str] = None,
+):
     global txt2img_pipe, img2img_pipe
 
     is_lightning = model_type == "sdxl-lightning"
@@ -831,9 +871,9 @@ def load_sdxl_pipeline(repo_id: str, device: str, vram_tier: Optional[str], mode
     use_safetensors = not is_tiny
 
     common = {
-        "cache_dir":        HF_HOME,
+        "cache_dir": HF_HOME,
         "local_files_only": OFFLINE_MODE,
-        "use_safetensors":  use_safetensors,
+        "use_safetensors": use_safetensors,
         "low_cpu_mem_usage": True,
     }
 
@@ -876,7 +916,9 @@ def load_sdxl_pipeline(repo_id: str, device: str, vram_tier: Optional[str], mode
         if is_single_file_sd:
             snapshot_path = resolve_cached_snapshot_path(base_repo_id)
             checkpoint_path = find_single_file_checkpoint(snapshot_path)
-            logger.info(f"Loading single-file Stable Diffusion checkpoint: {os.path.basename(checkpoint_path)}")
+            logger.info(
+                f"Loading single-file Stable Diffusion checkpoint: {os.path.basename(checkpoint_path)}"
+            )
             txt2img_pipe = StableDiffusionPipeline.from_single_file(
                 checkpoint_path,
                 config=snapshot_path,
@@ -906,9 +948,13 @@ def load_sdxl_pipeline(repo_id: str, device: str, vram_tier: Optional[str], mode
                 local_files_only=OFFLINE_MODE,
             )
             state_dict = load_file(lightning_unet_path, device="cpu")
-            missing, unexpected = txt2img_pipe.unet.load_state_dict(state_dict, strict=False)
+            missing, unexpected = txt2img_pipe.unet.load_state_dict(
+                state_dict, strict=False
+            )
             if unexpected:
-                raise RuntimeError(f"Unexpected SDXL-Lightning UNet keys: {unexpected[:5]}")
+                raise RuntimeError(
+                    f"Unexpected SDXL-Lightning UNet keys: {unexpected[:5]}"
+                )
             if missing:
                 logger.warning(f"Missing SDXL-Lightning UNet keys: {len(missing)}")
             logger.info("✓ SDXL-Lightning UNet loaded")
@@ -943,7 +989,9 @@ def load_sdxl_pipeline(repo_id: str, device: str, vram_tier: Optional[str], mode
             )
             snapshot_path = resolve_cached_snapshot_path(base_repo_id)
             checkpoint_path = find_single_file_checkpoint(snapshot_path)
-            logger.info(f"Loading single-file Stable Diffusion checkpoint: {os.path.basename(checkpoint_path)}")
+            logger.info(
+                f"Loading single-file Stable Diffusion checkpoint: {os.path.basename(checkpoint_path)}"
+            )
             txt2img_pipe = StableDiffusionPipeline.from_single_file(
                 checkpoint_path,
                 config=snapshot_path,
@@ -951,7 +999,9 @@ def load_sdxl_pipeline(repo_id: str, device: str, vram_tier: Optional[str], mode
                 **pipeline_kwargs,
             )
         else:
-            txt2img_pipe = AutoPipelineForText2Image.from_pretrained(base_repo_id, **pipeline_kwargs)
+            txt2img_pipe = AutoPipelineForText2Image.from_pretrained(
+                base_repo_id, **pipeline_kwargs
+            )
 
         if is_lightning or is_juggernaut:
             logger.info("Applying SDXL-Lightning 4-step UNet weights...")
@@ -962,9 +1012,13 @@ def load_sdxl_pipeline(repo_id: str, device: str, vram_tier: Optional[str], mode
                 local_files_only=OFFLINE_MODE,
             )
             state_dict = load_file(lightning_unet_path, device="cpu")
-            missing, unexpected = txt2img_pipe.unet.load_state_dict(state_dict, strict=False)
+            missing, unexpected = txt2img_pipe.unet.load_state_dict(
+                state_dict, strict=False
+            )
             if unexpected:
-                raise RuntimeError(f"Unexpected SDXL-Lightning UNet keys: {unexpected[:5]}")
+                raise RuntimeError(
+                    f"Unexpected SDXL-Lightning UNet keys: {unexpected[:5]}"
+                )
             if missing:
                 logger.warning(f"Missing SDXL-Lightning UNet keys: {len(missing)}")
             logger.info("✓ SDXL-Lightning UNet loaded")
@@ -986,6 +1040,7 @@ def load_sdxl_pipeline(repo_id: str, device: str, vram_tier: Optional[str], mode
 # Flux.1-schnell Pipeline Loader
 # ---------------------------------------------------------------------------
 
+
 def load_flux_pipeline(repo_id: str, device: str, vram_tier: Optional[str]):
     """
     Load Flux.1-schnell with NF4 4-bit T5 quantization on cards < 10GB.
@@ -1000,8 +1055,7 @@ def load_flux_pipeline(repo_id: str, device: str, vram_tier: Optional[str]):
 
     if device != "cuda":
         raise HTTPException(
-            status_code=400,
-            detail="Flux.1 requires CUDA. CPU/MPS is not supported."
+            status_code=400, detail="Flux.1 requires CUDA. CPU/MPS is not supported."
         )
 
     if get_total_vram_gb() < FLUX_MIN_VRAM_GB:
@@ -1014,17 +1068,21 @@ def load_flux_pipeline(repo_id: str, device: str, vram_tier: Optional[str]):
             ),
         )
 
-    use_4bit_t5  = vram_tier in ("medium",)
-    use_seq      = vram_tier in ("medium",)
+    use_4bit_t5 = vram_tier in ("mid_low", "medium")
+    use_seq = vram_tier in ("mid_low", "medium")
 
     common = {
-        "cache_dir":        HF_HOME,
+        "cache_dir": HF_HOME,
         "local_files_only": OFFLINE_MODE,
-        "use_safetensors":  True,
+        "use_safetensors": True,
         "low_cpu_mem_usage": True,
     }
 
-    t5_device = "cuda" if use_4bit_t5 else "pipeline-default"
+    t5_device = (
+        "cpu"
+        if (use_4bit_t5 and vram_tier == "mid_low")
+        else ("cuda" if use_4bit_t5 else "pipeline-default")
+    )
     logger.info(
         f"[flux] Loading | T5: {'NF4 4-bit' if use_4bit_t5 else 'bf16'} | "
         f"offload: {'sequential' if use_seq else 'model'} | "
@@ -1048,12 +1106,21 @@ def load_flux_pipeline(repo_id: str, device: str, vram_tier: Optional[str]):
         )
 
         def _load_flux_with_4bit_t5():
-            logger.info("[flux] Loading T5-XXL in NF4 4-bit on CUDA...")
+            # On low-VRAM cards, load T5 to CPU first. Sequential CPU offload
+            # will move individual layers to GPU one at a time during inference.
+            load_device = "cpu" if vram_tier == "mid_low" else "cuda"
+            logger.info(f"[flux] Loading T5-XXL in NF4 4-bit on {load_device}...")
             encoder_kwargs = {
-                "quantization_config": bnb_config,
                 "torch_dtype": torch.bfloat16,
                 **common,
             }
+            # bitsandbytes quantization only works on CUDA tensors;
+            # for CPU-first loading we skip quantization and rely on
+            # sequential offload to keep only one layer on GPU at a time.
+            if load_device == "cuda":
+                encoder_kwargs["quantization_config"] = bnb_config
+            else:
+                encoder_kwargs["device_map"] = "cpu"
 
             text_encoder_2 = T5EncoderModel.from_pretrained(
                 repo_id,
@@ -1070,9 +1137,7 @@ def load_flux_pipeline(repo_id: str, device: str, vram_tier: Optional[str]):
         try:
             txt2img_pipe = _load_flux_with_4bit_t5()
         except torch.OutOfMemoryError:
-            logger.warning(
-                "[flux] CUDA OOM while loading 4-bit T5 on CUDA"
-            )
+            logger.warning("[flux] CUDA OOM while loading 4-bit T5 on CUDA")
             aggressive_cleanup()
             raise HTTPException(
                 status_code=400,
@@ -1089,8 +1154,10 @@ def load_flux_pipeline(repo_id: str, device: str, vram_tier: Optional[str]):
         )
 
     # VAE optimizations — before offload
-    txt2img_pipe.enable_vae_tiling()
-    txt2img_pipe.enable_vae_slicing()
+    if hasattr(txt2img_pipe, "enable_vae_tiling"):
+        txt2img_pipe.enable_vae_tiling()
+    if hasattr(txt2img_pipe, "enable_vae_slicing"):
+        txt2img_pipe.enable_vae_slicing()
     logger.info("[flux] ✓ VAE tiling + slicing enabled")
 
     # DiT does not support xFormers or attention_slicing — offload only
@@ -1108,6 +1175,7 @@ def load_flux_pipeline(repo_id: str, device: str, vram_tier: Optional[str]):
 # ---------------------------------------------------------------------------
 # Unified Loader
 # ---------------------------------------------------------------------------
+
 
 def load_pipelines(model_type: str):
     global txt2img_pipe, img2img_pipe, current_model_id
@@ -1133,7 +1201,7 @@ def load_pipelines(model_type: str):
         img2img_pipe = None
         aggressive_cleanup()
 
-    device    = get_device()
+    device = get_device()
     vram_tier = get_vram_tier()
 
     logger.info(
@@ -1176,6 +1244,7 @@ def load_pipelines(model_type: str):
 # Generation Helpers
 # ---------------------------------------------------------------------------
 
+
 def _resolve_steps_and_guidance(
     loaded_id: str, req_steps: int, req_guidance: float, is_flux: bool
 ) -> tuple[int, float]:
@@ -1195,10 +1264,12 @@ def _resolve_steps_and_guidance(
 
 
 def _resolve_resolution(
-    req_w: int, req_h: int,
+    req_w: int,
+    req_h: int,
     vram_tier: Optional[str],
     model_id: str,
-    is_xl: bool, is_flux: bool,
+    is_xl: bool,
+    is_flux: bool,
     device: str,
 ) -> tuple[int, int]:
     align = 16 if is_flux else 8
@@ -1270,7 +1341,9 @@ def build_generation_resolution_candidates(
                 align,
             )
 
-    fallback = _resolve_resolution(req_w, req_h, vram_tier, model_id, is_xl, is_flux, device)
+    fallback = _resolve_resolution(
+        req_w, req_h, vram_tier, model_id, is_xl, is_flux, device
+    )
     candidates = [initial]
     if fallback != initial:
         candidates.append(fallback)
@@ -1292,13 +1365,14 @@ def build_generation_resolution_candidates(
 # Endpoints
 # ---------------------------------------------------------------------------
 
+
 @app.post("/generate")
 async def generate_image(req: GenerateRequest):
     aggressive_cleanup()
 
-    device    = get_device()
+    device = get_device()
     vram_tier = get_vram_tier()
-    is_flux   = req.model_type == "flux-schnell"
+    is_flux = req.model_type == "flux-schnell"
 
     if device == "cuda":
         logger.info(f"Pre-generation VRAM: {get_vram_info()}")
@@ -1307,7 +1381,11 @@ async def generate_image(req: GenerateRequest):
         t2i, i2i = load_pipelines(req.model_type)
 
         loaded_id = current_model_id or ""
-        is_xl = "lightning" in loaded_id.lower() or "juggernaut" in loaded_id.lower() or "flux" in loaded_id.lower()
+        is_xl = (
+            "lightning" in loaded_id.lower()
+            or "juggernaut" in loaded_id.lower()
+            or "flux" in loaded_id.lower()
+        )
 
         # Flux does not support img2img
         if is_flux and req.image:
@@ -1323,7 +1401,13 @@ async def generate_image(req: GenerateRequest):
             loaded_id, req.steps, req.guidance_scale, is_flux
         )
         resolution_candidates = build_generation_resolution_candidates(
-            req.width, req.height, vram_tier, loaded_id or req.model_type, is_xl, is_flux, device
+            req.width,
+            req.height,
+            vram_tier,
+            loaded_id or req.model_type,
+            is_xl,
+            is_flux,
+            device,
         )
         safe_prompt = req.prompt[:50].replace("\n", " ")
         output = None
@@ -1357,9 +1441,11 @@ async def generate_image(req: GenerateRequest):
             try:
                 if req.image:
                     # img2img — SDXL / SD 1.5 only (Flux blocked above)
-                    img_bytes  = decode_base64_image(req.image)
+                    img_bytes = decode_base64_image(req.image)
                     init_image = Image.open(BytesIO(img_bytes)).convert("RGB")
-                    init_image = init_image.resize((width, height), Image.Resampling.LANCZOS)
+                    init_image = init_image.resize(
+                        (width, height), Image.Resampling.LANCZOS
+                    )
                     output = i2i(
                         prompt=req.prompt,
                         image=init_image,
@@ -1401,7 +1487,9 @@ async def generate_image(req: GenerateRequest):
 
         image = output.images[0]
 
-        img_str, mime_type, file_extension = encode_image_output(image, req.output_format)
+        img_str, mime_type, file_extension = encode_image_output(
+            image, req.output_format
+        )
 
         aggressive_cleanup()
 
@@ -1409,16 +1497,16 @@ async def generate_image(req: GenerateRequest):
             logger.info(f"Post-generation VRAM: {get_vram_info()}")
 
         return {
-            "status":       "success",
+            "status": "success",
             "image_base64": img_str,
-            "mime_type":    mime_type,
+            "mime_type": mime_type,
             "file_extension": file_extension,
             "output_format": req.output_format,
-            "model_used":   loaded_id,
+            "model_used": loaded_id,
             "requested_size": f"{req.width}x{req.height}",
-            "actual_size":  f"{width}x{height}",
-            "steps_used":   steps,
-            "vram_tier":    vram_tier,
+            "actual_size": f"{width}x{height}",
+            "steps_used": steps,
+            "vram_tier": vram_tier,
         }
 
     except HTTPException:
@@ -1445,17 +1533,23 @@ async def generate_image(req: GenerateRequest):
 async def upscale_image(req: UpscaleRequest):
     """AI upscale via Swin2SR or Real-ESRGAN."""
     aggressive_cleanup()
-    logger.info("Upscale request received | scale=%sx | upscaler=%s", req.scale, req.upscaler)
+    logger.info(
+        "Upscale request received | scale=%sx | upscaler=%s", req.scale, req.upscaler
+    )
 
     try:
-        img_bytes  = decode_base64_image(req.image)
+        img_bytes = decode_base64_image(req.image)
         init_image = Image.open(BytesIO(img_bytes)).convert("RGB")
         requested_device = get_device()
         vram_tier = get_vram_tier()
         actual_scale, was_capped = resolve_upscale_scale(
             req.scale, requested_device, vram_tier, req.upscaler
         )
-        total_passes = {2: 1, 4: 2, 8: 3}[actual_scale] if req.upscaler == "swin2sr" else {2: 1, 4: 1, 8: 2}[actual_scale]
+        total_passes = (
+            {2: 1, 4: 2, 8: 3}[actual_scale]
+            if req.upscaler == "swin2sr"
+            else {2: 1, 4: 1, 8: 2}[actual_scale]
+        )
         output_image = init_image
         final_device = requested_device
         final_tile_size = None
@@ -1493,7 +1587,9 @@ async def upscale_image(req: UpscaleRequest):
                         requested_device,
                         vram_tier,
                     )
-                    used_cpu_fallback = used_cpu_fallback or final_device != requested_device
+                    used_cpu_fallback = (
+                        used_cpu_fallback or final_device != requested_device
+                    )
             finally:
                 del model, processor
                 aggressive_cleanup()
@@ -1515,7 +1611,9 @@ async def upscale_image(req: UpscaleRequest):
                     vram_tier,
                     outscale=pass_scale,
                 )
-                used_cpu_fallback = used_cpu_fallback or final_device != requested_device
+                used_cpu_fallback = (
+                    used_cpu_fallback or final_device != requested_device
+                )
             aggressive_cleanup()
 
         img_str, mime_type, file_extension = encode_image_output(
@@ -1566,123 +1664,137 @@ async def upscale_image(req: UpscaleRequest):
 # Info Endpoints
 # ---------------------------------------------------------------------------
 
+
 @app.get("/health")
 def health_check():
     return {
-        "status":       "ok",
-        "device":       get_device(),
+        "status": "ok",
+        "device": get_device(),
         "loaded_model": current_model_id,
-        "vram":         get_vram_info(),
-        "vram_tier":    get_vram_tier(),
+        "vram": get_vram_info(),
+        "vram_tier": get_vram_tier(),
     }
 
 
 @app.get("/models")
 def list_models():
-    device     = get_device()
-    vram_tier  = get_vram_tier()
-    vram_info  = get_vram_info()
+    device = get_device()
+    vram_tier = get_vram_tier()
+    vram_info = get_vram_info()
     total_vram = get_total_vram_gb()
 
     models = [
         {
-            "id":       "sdxl-lightning",
-            "name":     "SDXL Lightning (4-step)",
-            "repo":     "stabilityai/stable-diffusion-xl-base-1.0 + ByteDance/SDXL-Lightning",
-            "speed":    "fast",
+            "id": "sdxl-lightning",
+            "name": "SDXL Lightning (4-step)",
+            "repo": "stabilityai/stable-diffusion-xl-base-1.0 + ByteDance/SDXL-Lightning",
+            "speed": "fast",
             "use_case": "General generation, fast drafts",
-            "supports_img2img":      True,
+            "supports_img2img": True,
             "supports_negative_prompt": True,
         },
         {
-            "id":       "stable-diffusion",
-            "name":     "Realistic Vision V6",
-            "repo":     "SG161222/Realistic_Vision_V6.0_B1_noVAE",
-            "speed":    "medium",
+            "id": "stable-diffusion",
+            "name": "Realistic Vision V6",
+            "repo": "SG161222/Realistic_Vision_V6.0_B1_noVAE",
+            "speed": "medium",
             "use_case": "Portrait photography",
-            "supports_img2img":      True,
+            "supports_img2img": True,
             "supports_negative_prompt": True,
         },
         {
-            "id":       "dalle-mini",
-            "name":     "Tiny-SD (Lightweight)",
-            "repo":     "segmind/tiny-sd",
-            "speed":    "very fast",
+            "id": "juggernaut-xl",
+            "name": "Juggernaut XL v9 (Quality)",
+            "repo": "RunDiffusion/Juggernaut-XL-v9",
+            "speed": "medium",
+            "use_case": "High-quality SDXL, stylized + realistic",
+            "supports_img2img": True,
+            "supports_negative_prompt": True,
+        },
+        {
+            "id": "dalle-mini",
+            "name": "Tiny-SD (Lightweight)",
+            "repo": "segmind/tiny-sd",
+            "speed": "very fast",
             "use_case": "Low-resource fallback",
-            "supports_img2img":      True,
+            "supports_img2img": True,
             "supports_negative_prompt": True,
         },
         {
-            "id":       "flux-schnell",
-            "name":     "Flux.1-schnell (4-bit, Photorealism)",
-            "repo":     "black-forest-labs/FLUX.1-schnell",
-            "speed":    "medium",
+            "id": "flux-schnell",
+            "name": "Flux.1-schnell (4-bit, Photorealism)",
+            "repo": "black-forest-labs/FLUX.1-schnell",
+            "speed": "medium",
             "use_case": "Best photorealism, text in image, complex prompts",
-            "supports_img2img":         False,
+            "supports_img2img": False,
             "supports_negative_prompt": False,
-            "available":           device == "cuda" and total_vram >= FLUX_MIN_VRAM_GB,
-            "requires_vram_gb":    FLUX_MIN_VRAM_GB,
-            "quantization":        "NF4 4-bit T5 on <10GB cards",
+            "available": device == "cuda" and total_vram >= FLUX_MIN_VRAM_GB,
+            "requires_vram_gb": FLUX_MIN_VRAM_GB,
+            "quantization": "NF4 4-bit T5 on <10GB cards",
         },
     ]
 
     for m in models:
         is_flux = m["id"] == "flux-schnell"
-        is_xl   = m["id"] == "sdxl-lightning"
+        is_xl = m["id"] in ("sdxl-lightning", "juggernaut-xl")
 
         if device == "cuda" and vram_info:
             if is_flux:
                 w, h = get_flux_resolution(vram_tier)
-                m["max_resolution"]         = f"{w}x{h}"
+                m["max_resolution"] = f"{w}x{h}"
                 m["recommended_resolution"] = f"{w}x{h}"
                 m["vram_usage"] = {
-                    "mid_low": "unsupported (<8GB VRAM in this build)",
-                    "medium":  "~7-8GB (4-bit T5)",
-                    "high":    "~10-12GB (bf16)",
-                    "ultra":   "~14-16GB (bf16)",
+                    "mid_low": "~5-6GB (4-bit T5, sequential CPU offload, 512x512)",
+                    "medium": "~7-8GB (4-bit T5)",
+                    "high": "~10-12GB (bf16)",
+                    "ultra": "~14-16GB (bf16)",
                 }.get(vram_tier or "mid_low", "~6-8GB")
             else:
-                max_res, rec_res = get_model_resolution_limits(m["id"], vram_tier, is_xl)
-                m["max_resolution"]         = f"{max_res}x{max_res}"
+                max_res, rec_res = get_model_resolution_limits(
+                    m["id"], vram_tier, is_xl
+                )
+                m["max_resolution"] = f"{max_res}x{max_res}"
                 m["recommended_resolution"] = f"{rec_res}x{rec_res}"
                 m["vram_usage"] = (
-                    "~5-6GB" if is_xl
-                    else "~3-4GB" if m["id"] == "stable-diffusion"
-                    else "~2-3GB"
+                    "~5-6GB"
+                    if is_xl
+                    else "~3-4GB" if m["id"] == "stable-diffusion" else "~2-3GB"
                 )
         else:
-            m["max_resolution"]         = "512x512"
+            m["max_resolution"] = "512x512"
             m["recommended_resolution"] = "512x512"
-            m["vram_usage"]             = "N/A (CPU)"
+            m["vram_usage"] = "N/A (CPU)"
 
     return {
-        "device":     device,
-        "vram_tier":  vram_tier,
+        "device": device,
+        "vram_tier": vram_tier,
         "total_vram": vram_info["total_gb"] if vram_info else None,
-        "models":     models,
+        "models": models,
     }
 
 
 @app.get("/system")
 def system_info():
-    device    = get_device()
+    device = get_device()
     vram_tier = get_vram_tier()
     info = {"device": device, "vram_tier": vram_tier, "vram": get_vram_info()}
 
     if device == "cuda":
         use_seq = should_use_sequential_offload(vram_tier, model_type="sdxl-lightning")
-        info.update({
-            "cuda_version":  torch.version.cuda,
-            "gpu_name":      torch.cuda.get_device_name(0),
-            "gpu_count":     torch.cuda.device_count(),
-            "flux_available": get_total_vram_gb() >= FLUX_MIN_VRAM_GB,
-            "optimization_strategy": {
-                "sequential_offload": use_seq,
-                "reason": (
-                    "Memory-optimized / sequential offload for SDXL/Flux on this tier"
-                    if use_seq else
-                    "Speed-optimized / model offload for SD 1.5-class models"
-                ),
-            },
-        })
+        info.update(
+            {
+                "cuda_version": torch.version.cuda,
+                "gpu_name": torch.cuda.get_device_name(0),
+                "gpu_count": torch.cuda.device_count(),
+                "flux_available": get_total_vram_gb() >= FLUX_MIN_VRAM_GB,
+                "optimization_strategy": {
+                    "sequential_offload": use_seq,
+                    "reason": (
+                        "Memory-optimized / sequential offload for SDXL/Flux on this tier"
+                        if use_seq
+                        else "Speed-optimized / model offload for SD 1.5-class models"
+                    ),
+                },
+            }
+        )
     return info
