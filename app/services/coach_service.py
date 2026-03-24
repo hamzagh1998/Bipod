@@ -136,6 +136,7 @@ class CoachService:
         "proficient": "fluent",
     }
     ALLOCATION_POLICIES = ("auto_balance", "prioritize_llm", "prioritize_tts")
+    DEVICE_PREFERENCES = ("auto", "cpu", "cuda")
 
     def __init__(self) -> None:
         self.base_url = settings.OLLAMA_BASE_URL
@@ -145,6 +146,7 @@ class CoachService:
         self._whisper_lock = asyncio.Lock()
         self._whisper_runtime_device: Optional[str] = None
         self._whisper_accurate_runtime_device: Optional[str] = None
+        self._asr_warmup_task: Optional[asyncio.Task[Any]] = None
         self._voice_cipher: Optional[Fernet] = None
         self._voice_cipher_key: Optional[str] = None
 
@@ -196,12 +198,37 @@ class CoachService:
             return "auto_balance"
         return policy
 
+    def _normalize_device_preference(self, value: Optional[str]) -> str:
+        normalized = str(value or "").strip().lower()
+        if normalized in self.DEVICE_PREFERENCES:
+            return normalized
+        return "auto"
+
+    def _effective_device_preference(
+        self,
+        *,
+        explicit_preference: Optional[str],
+        persisted_preference: Optional[str],
+    ) -> str:
+        normalized_explicit = self._normalize_device_preference(explicit_preference)
+        if normalized_explicit != "auto":
+            return normalized_explicit
+        return self._normalize_device_preference(persisted_preference)
+
+    def _ollama_num_gpu_option(self, llm_device: Optional[str]) -> Optional[int]:
+        normalized = str(llm_device or "").strip().lower()
+        if normalized == "cpu":
+            return 0
+        return None
+
     def _runtime_allocation(
         self,
         *,
         profile: Mapping[str, Any],
         mode: str,
         preferred_model: Optional[str] = None,
+        llm_device_preference: Optional[str] = None,
+        tts_device_preference: Optional[str] = None,
     ) -> dict[str, Any]:
         policy = self._allocation_policy_name()
         runtime_mode = self._coach_runtime_mode(mode)
@@ -211,34 +238,39 @@ class CoachService:
         profile_name = str(profile.get("name") or "").strip().lower()
         pinned_model = bool(str(preferred_model or "").strip() and str(preferred_model or "").strip().lower() != "auto")
         model_size_b = self._model_size_billion(selected_model)
+        llm_pref = self._normalize_device_preference(llm_device_preference)
+        tts_pref = self._normalize_device_preference(tts_device_preference)
 
         llm_device = "cuda" if gpu_enabled else "cpu"
         tts_device = str(profile.get("tts_device") or ("cuda" if gpu_enabled else "cpu")).strip().lower() or "cpu"
         reason = "balanced_default"
+        warnings: list[str] = []
 
         if not gpu_enabled:
+            if llm_pref == "cuda":
+                warnings.append("LLM GPU preference was requested but CUDA is unavailable; using CPU.")
+            if tts_pref == "cuda":
+                warnings.append("TTS GPU preference was requested but CUDA is unavailable; using CPU.")
+            if llm_pref != "auto" or tts_pref != "auto":
+                reason = "cuda_unavailable"
             return {
                 "policy": policy,
-                "reason": "cuda_unavailable",
+                "reason": reason,
                 "llm_device": "cpu",
                 "tts_device": "cpu",
                 "gpu_vram_gb": gpu_vram_gb,
                 "selected_model": selected_model,
                 "model_size_b": model_size_b,
                 "pinned_model": pinned_model,
+                "llm_device_preference": llm_pref,
+                "tts_device_preference": tts_pref,
+                "allocation_warnings": warnings,
             }
 
         if runtime_mode == "idle":
-            return {
-                "policy": policy,
-                "reason": "idle_mode",
-                "llm_device": "cuda",
-                "tts_device": "cpu",
-                "gpu_vram_gb": gpu_vram_gb,
-                "selected_model": selected_model,
-                "model_size_b": model_size_b,
-                "pinned_model": pinned_model,
-            }
+            llm_device = "cuda"
+            tts_device = "cpu"
+            reason = "idle_mode"
 
         if policy == "prioritize_tts":
             if pinned_model and (model_size_b is None or model_size_b > 4.0):
@@ -269,6 +301,51 @@ class CoachService:
                 tts_device = "cpu"
                 reason = "insufficient_vram"
 
+        manual_pref_applied = False
+        fallback_due_to_cuda_unavailable = False
+
+        if llm_pref != "auto":
+            manual_pref_applied = True
+            if llm_pref == "cuda":
+                if gpu_enabled:
+                    llm_device = "cuda"
+                else:
+                    llm_device = "cpu"
+                    fallback_due_to_cuda_unavailable = True
+                    warnings.append("LLM GPU preference is unavailable; falling back to CPU.")
+            else:
+                llm_device = "cpu"
+
+        if tts_pref != "auto":
+            manual_pref_applied = True
+            if tts_pref == "cuda":
+                if gpu_enabled:
+                    tts_device = "cuda"
+                else:
+                    tts_device = "cpu"
+                    fallback_due_to_cuda_unavailable = True
+                    warnings.append("TTS GPU preference is unavailable; falling back to CPU.")
+            else:
+                tts_device = "cpu"
+
+        if manual_pref_applied:
+            if fallback_due_to_cuda_unavailable:
+                reason = "cuda_unavailable"
+            elif llm_pref == "cpu" and tts_pref == "cuda":
+                reason = "manual_split_pref"
+            else:
+                reason = "manual_component_pref"
+
+        if (
+            gpu_enabled
+            and llm_device == "cuda"
+            and tts_device == "cuda"
+            and profile_name != "gpu_full"
+        ):
+            warnings.append(
+                "Both LLM and TTS are pinned to GPU on constrained hardware; performance may drop."
+            )
+
         return {
             "policy": policy,
             "reason": reason,
@@ -278,6 +355,9 @@ class CoachService:
             "selected_model": selected_model,
             "model_size_b": model_size_b,
             "pinned_model": pinned_model,
+            "llm_device_preference": llm_pref,
+            "tts_device_preference": tts_pref,
+            "allocation_warnings": warnings,
         }
 
     def _coach_hardware_profile(self) -> dict[str, Any]:
@@ -490,6 +570,8 @@ class CoachService:
         focus_area: Optional[str] = None,
         model_id: Optional[str] = None,
         voice_profile_id: Optional[str] = None,
+        llm_device_preference: Optional[str] = "auto",
+        tts_device_preference: Optional[str] = "auto",
     ) -> CoachSession:
         session_id = str(uuid.uuid4())
         normalized_target_language = self._resolve_supported_language_name(target_language)
@@ -516,6 +598,8 @@ class CoachService:
                 audio_retention_opt_in=bool(audio_retention_opt_in),
                 focus_area=focus_area.strip() if isinstance(focus_area, str) else focus_area,
                 model_id=model_id.strip() if isinstance(model_id, str) else model_id,
+                llm_device_preference=self._normalize_device_preference(llm_device_preference),
+                tts_device_preference=self._normalize_device_preference(tts_device_preference),
                 voice_profile_id=normalized_voice_profile_id,
             )
             session.add(coach_session)
@@ -547,6 +631,12 @@ class CoachService:
                     "audio_retention_opt_in": coach_session.audio_retention_opt_in,
                     "focus_area": coach_session.focus_area,
                     "model_id": coach_session.model_id,
+                    "llm_device_preference": self._normalize_device_preference(
+                        getattr(coach_session, "llm_device_preference", "auto")
+                    ),
+                    "tts_device_preference": self._normalize_device_preference(
+                        getattr(coach_session, "tts_device_preference", "auto")
+                    ),
                     "voice_profile_id": coach_session.voice_profile_id,
                     "status": coach_session.status,
                     "created_at": coach_session.created_at,
@@ -556,6 +646,41 @@ class CoachService:
                 }
             )
         return response
+
+    async def update_session_settings(
+        self,
+        *,
+        session_id: str,
+        user_id: int,
+        model_id: Optional[str] = None,
+        llm_device_preference: Optional[str] = "auto",
+        tts_device_preference: Optional[str] = "auto",
+    ) -> Optional[CoachSession]:
+        normalized_session_id = str(session_id or "").strip()
+        if not normalized_session_id:
+            return None
+        normalized_model_id = str(model_id or "").strip() or None
+        normalized_llm_pref = self._normalize_device_preference(llm_device_preference)
+        normalized_tts_pref = self._normalize_device_preference(tts_device_preference)
+
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(
+                select(CoachSession)
+                .where(
+                    CoachSession.id == normalized_session_id,
+                    CoachSession.user_id == user_id,
+                )
+                .options(selectinload(CoachSession.turns).selectinload(CoachTurn.mistakes))
+            )
+            coach_session = result.scalar_one_or_none()
+            if coach_session is None:
+                return None
+            coach_session.model_id = normalized_model_id
+            coach_session.llm_device_preference = normalized_llm_pref
+            coach_session.tts_device_preference = normalized_tts_pref
+            await session.commit()
+            await session.refresh(coach_session)
+            return coach_session
 
     async def get_session(self, session_id: str, user_id: int) -> Optional[CoachSession]:
         session_id = str(session_id)
@@ -777,12 +902,12 @@ class CoachService:
             )
         if normalized == "high":
             return (
-                "Learner level is high. Be more critical about precision, nuance, and natural phrasing. "
-                "Keep feedback direct and concrete."
+                "Learner level is high. Be rigorous about precision, nuance, and natural phrasing while staying respectful and encouraging. "
+                "Critique the learner's sentence, not the learner."
             )
         return (
-            "Learner level is fluent. Be highly critical and focus on advanced accuracy, style, and naturalness. "
-            "Challenge the learner with concise, high-value feedback."
+            "Learner level is fluent. Be highly rigorous and focus on advanced accuracy, style, and naturalness without being dismissive. "
+            "Challenge the learner with concise, high-value feedback and actionable alternatives."
         )
 
     def _should_attach_translation(
@@ -870,8 +995,13 @@ class CoachService:
 
     def _try_parse_translation_mapping(self, raw: str) -> Optional[dict[str, Any]]:
         value = str(raw or "").strip()
-        if not value or not value.startswith("{") or not value.endswith("}"):
+        if not value:
             return None
+        if not (value.startswith("{") and value.endswith("}")):
+            match = re.search(r"\{.*\}", value, flags=re.DOTALL)
+            if not match:
+                return None
+            value = match.group(0).strip()
         for parser in (json.loads, ast.literal_eval):
             try:
                 parsed = parser(value)
@@ -1043,6 +1173,33 @@ class CoachService:
         if self._normalized_message_key(name_reply) in self._normalized_message_key(candidate_reply):
             return candidate_reply
         return f"{name_reply} {candidate_reply}".strip()
+
+    def _sanitize_coach_tone(self, text: str) -> str:
+        rendered = re.sub(r"\s+", " ", str(text or "")).strip()
+        if not rendered:
+            return ""
+        replacements = (
+            (
+                r"\byou(?:'re| are)\s+avoiding\s+the\s+question\b[.!]?\s*",
+                "Thanks. Let's make your answer more specific. ",
+            ),
+            (
+                r"\byou(?:'re| are)\s+not\s+answering\s+the\s+question\b[.!]?\s*",
+                "Let's answer the question directly with one short sentence. ",
+            ),
+            (
+                r"\bstop\s+avoiding\s+the\s+question\b[.!]?\s*",
+                "Let's refocus with one clear sentence. ",
+            ),
+            (
+                r"\bwhy\s+are\s+you\s+avoiding\s+the\s+question\b[!?]?\s*",
+                "Let's focus on one direct answer. ",
+            ),
+        )
+        for pattern, replacement in replacements:
+            rendered = re.sub(pattern, replacement, rendered, flags=re.IGNORECASE)
+        rendered = re.sub(r"\s+", " ", rendered).strip()
+        return rendered
 
     def _prevent_repeat_loop(
         self,
@@ -1822,12 +1979,22 @@ class CoachService:
         warm: bool,
         mode: str,
         preferred_model: Optional[str] = None,
+        llm_device_preference: Optional[str] = None,
+        tts_device_preference: Optional[str] = None,
     ) -> dict[str, Any]:
         profile = self._coach_hardware_profile()
         requested_model = str(preferred_model or "").strip()
         selected_model = str(requested_model or profile.get("llm_primary_model") or settings.HEAVY_MODEL)
         if mode == "idle":
             selected_model = settings.SMART_MODEL
+        allocation = self._runtime_allocation(
+            profile=profile,
+            mode=mode,
+            preferred_model=selected_model,
+            llm_device_preference=llm_device_preference,
+            tts_device_preference=tts_device_preference,
+        )
+        planned_llm_device = str(allocation.get("llm_device") or "cpu")
         timeout = httpx.Timeout(connect=3.0, read=15.0, write=10.0, pool=10.0)
         status: dict[str, Any] = {
             "engine": "ollama",
@@ -1838,6 +2005,8 @@ class CoachService:
             "selection_reason": "requested_model" if requested_model and requested_model.lower() != "auto" else "profile_default",
             "available_models": [],
             "runtime_profile": profile.get("name"),
+            "runtime_device": planned_llm_device,
+            "planned_runtime_device": planned_llm_device,
         }
         try:
             async with httpx.AsyncClient(timeout=timeout) as client:
@@ -1880,6 +2049,9 @@ class CoachService:
                             "temperature": 0.1,
                         },
                     }
+                    num_gpu = self._ollama_num_gpu_option(planned_llm_device)
+                    if num_gpu is not None:
+                        warm_payload["options"]["num_gpu"] = num_gpu
                     warm_response = await client.post(f"{self.base_url}/api/generate", json=warm_payload)
                     if warm_response.status_code >= 400:
                         status["state"] = "warming"
@@ -1891,23 +2063,71 @@ class CoachService:
             status["detail"] = f"Ollama unavailable: {exc}"
         return status
 
-    async def _asr_status(self, *, warm: bool) -> dict[str, Any]:
+    def _asr_warmup_in_progress(self) -> bool:
+        task = self._asr_warmup_task
+        return bool(task is not None and not task.done())
+
+    def _ensure_asr_warmup(self, *, preload_accurate: bool) -> bool:
+        if self._whisper_model is not None:
+            if not preload_accurate:
+                return False
+            accurate_model_name = self._accurate_whisper_model_ref()
+            fast_model_name = self._fast_whisper_model_ref()
+            if accurate_model_name == fast_model_name or self._whisper_accurate_model is not None:
+                return False
+        if self._asr_warmup_in_progress():
+            return False
+
+        async def runner() -> None:
+            try:
+                await self._get_whisper_model()
+                if preload_accurate:
+                    await self._get_whisper_accurate_model()
+            except Exception as exc:
+                logger.warning("ASR warmup task failed: %s", exc)
+
+        task = asyncio.create_task(runner())
+        self._asr_warmup_task = task
+
+        def _clear_if_current(done_task: asyncio.Task[Any]) -> None:
+            if self._asr_warmup_task is done_task:
+                self._asr_warmup_task = None
+
+        task.add_done_callback(_clear_if_current)
+        return True
+
+    async def _asr_status(self, *, warm: bool, auto_warm: bool = False) -> dict[str, Any]:
         profile = self._coach_hardware_profile()
         fast_model_name = self._fast_whisper_model_ref()
         accurate_model_name = self._accurate_whisper_model_ref()
+        preload_accurate = bool(profile.get("asr_preload_accurate"))
+        warmup_requested = False
         if warm:
             await self._get_whisper_model()
-            if bool(profile.get("asr_preload_accurate")):
+            if preload_accurate:
                 await self._get_whisper_accurate_model()
+            warmup_requested = True
+        elif auto_warm:
+            warmup_requested = self._ensure_asr_warmup(preload_accurate=preload_accurate)
+        warmup_active = self._asr_warmup_in_progress()
         accurate_ready = self._whisper_accurate_model is not None
         if warm and accurate_model_name == fast_model_name:
             accurate_ready = self._whisper_model is not None
         ready = self._whisper_model is not None
+        state = "ready" if ready else ("warming" if (warm or auto_warm or warmup_active) else "idle")
+        if ready:
+            detail = "ASR model ready."
+        elif warmup_active:
+            detail = "ASR model warming in background."
+        elif warmup_requested or warm or auto_warm:
+            detail = "ASR warmup requested."
+        else:
+            detail = "ASR model not loaded yet."
         return {
             "engine": "faster-whisper",
             "ready": ready,
-            "state": "ready" if ready else ("warming" if warm else "idle"),
-            "detail": "ASR model ready." if ready else "ASR model not loaded yet.",
+            "state": state,
+            "detail": detail,
             "model_id": fast_model_name,
             "runtime_device": self._whisper_runtime_device or "",
             "planned_runtime_device": str(profile.get("asr_device") or ""),
@@ -1916,6 +2136,7 @@ class CoachService:
             "accurate_model_id": accurate_model_name,
             "fast_model_ready": ready,
             "accurate_model_ready": accurate_ready,
+            "warmup_active": warmup_active,
         }
 
     async def get_runtime_status(
@@ -1923,25 +2144,58 @@ class CoachService:
         *,
         warm: bool = False,
         mode: Optional[str] = None,
+        session_id: Optional[str] = None,
+        user_id: Optional[int] = None,
         preferred_model: Optional[str] = None,
         preferred_tts_provider: Optional[str] = None,
+        llm_device_preference: Optional[str] = "auto",
+        tts_device_preference: Optional[str] = "auto",
     ) -> dict[str, Any]:
         profile = self._coach_hardware_profile()
         runtime_mode = self._coach_runtime_mode(mode)
         want_voice = runtime_mode == "voice"
+        persisted_llm_pref = "auto"
+        persisted_tts_pref = "auto"
+        normalized_session_id = str(session_id or "").strip()
+        if normalized_session_id and user_id is not None:
+            session = await self.get_session(session_id=normalized_session_id, user_id=int(user_id))
+            if session is not None:
+                persisted_llm_pref = self._normalize_device_preference(
+                    getattr(session, "llm_device_preference", "auto")
+                )
+                persisted_tts_pref = self._normalize_device_preference(
+                    getattr(session, "tts_device_preference", "auto")
+                )
+        effective_llm_pref = self._effective_device_preference(
+            explicit_preference=llm_device_preference,
+            persisted_preference=persisted_llm_pref,
+        )
+        effective_tts_pref = self._effective_device_preference(
+            explicit_preference=tts_device_preference,
+            persisted_preference=persisted_tts_pref,
+        )
         tts_task = asyncio.create_task(
             self.get_tts_status(
                 warm=(warm and want_voice),
+                session_id=normalized_session_id or None,
+                user_id=user_id,
                 preferred_model=preferred_model,
                 preferred_tts_provider=preferred_tts_provider,
+                llm_device_preference=effective_llm_pref,
+                tts_device_preference=effective_tts_pref,
             )
         )
-        asr_task = asyncio.create_task(self._asr_status(warm=(warm and want_voice)))
+        if want_voice and not warm:
+            asr_task = asyncio.create_task(self._asr_status(warm=False, auto_warm=True))
+        else:
+            asr_task = asyncio.create_task(self._asr_status(warm=(warm and want_voice)))
         llm_task = asyncio.create_task(
             self._ollama_status(
                 warm=warm,
                 mode=runtime_mode,
                 preferred_model=preferred_model,
+                llm_device_preference=effective_llm_pref,
+                tts_device_preference=effective_tts_pref,
             )
         )
         lt_task = asyncio.create_task(self._languagetool_status())
@@ -1955,6 +2209,8 @@ class CoachService:
             profile=profile,
             mode=runtime_mode,
             preferred_model=preferred_model or str(llm_status.get("selected_model") or ""),
+            llm_device_preference=effective_llm_pref,
+            tts_device_preference=effective_tts_pref,
         )
         components = {
             "tts": tts_status,
@@ -1974,8 +2230,11 @@ class CoachService:
             "state": state,
             "allocation_policy": str(allocation.get("policy") or "auto_balance"),
             "allocation_reason": str(allocation.get("reason") or ""),
+            "allocation_warnings": list(allocation.get("allocation_warnings") or []),
             "llm_device": str(allocation.get("llm_device") or ""),
             "tts_device": str(allocation.get("tts_device") or ""),
+            "llm_device_preference": effective_llm_pref,
+            "tts_device_preference": effective_tts_pref,
             "vram_snapshot": {
                 "gpu_enabled": bool(profile.get("use_gpu")),
                 "gpu_vram_gb": profile.get("gpu_vram_gb"),
@@ -1992,6 +2251,8 @@ class CoachService:
                 "asr_accurate_model": str(profile.get("asr_accurate_model") or ""),
                 "tts_device": str(profile.get("tts_device") or ""),
                 "allocation_policy": str(allocation.get("policy") or "auto_balance"),
+                "llm_device_preference": effective_llm_pref,
+                "tts_device_preference": effective_tts_pref,
             },
             "components": components,
         }
@@ -2006,14 +2267,40 @@ class CoachService:
         self,
         *,
         warm: bool = False,
+        session_id: Optional[str] = None,
+        user_id: Optional[int] = None,
         preferred_model: Optional[str] = None,
         preferred_tts_provider: Optional[str] = None,
+        llm_device_preference: Optional[str] = "auto",
+        tts_device_preference: Optional[str] = "auto",
     ) -> dict[str, Any]:
         profile = self._coach_hardware_profile()
+        persisted_llm_pref = "auto"
+        persisted_tts_pref = "auto"
+        normalized_session_id = str(session_id or "").strip()
+        if normalized_session_id and user_id is not None:
+            session = await self.get_session(session_id=normalized_session_id, user_id=int(user_id))
+            if session is not None:
+                persisted_llm_pref = self._normalize_device_preference(
+                    getattr(session, "llm_device_preference", "auto")
+                )
+                persisted_tts_pref = self._normalize_device_preference(
+                    getattr(session, "tts_device_preference", "auto")
+                )
+        effective_llm_pref = self._effective_device_preference(
+            explicit_preference=llm_device_preference,
+            persisted_preference=persisted_llm_pref,
+        )
+        effective_tts_pref = self._effective_device_preference(
+            explicit_preference=tts_device_preference,
+            persisted_preference=persisted_tts_pref,
+        )
         allocation = self._runtime_allocation(
             profile=profile,
             mode="voice",
             preferred_model=preferred_model,
+            llm_device_preference=effective_llm_pref,
+            tts_device_preference=effective_tts_pref,
         )
         provider = str(
             preferred_tts_provider
@@ -2052,6 +2339,9 @@ class CoachService:
                 "fallback_reason": fallback_reason,
                 "allocation_policy": str(allocation.get("policy") or "auto_balance"),
                 "allocation_reason": str(allocation.get("reason") or ""),
+                "allocation_warnings": list(allocation.get("allocation_warnings") or []),
+                "llm_device_preference": effective_llm_pref,
+                "tts_device_preference": effective_tts_pref,
             }
 
         engine_name = "cosyvoice"
@@ -2083,6 +2373,9 @@ class CoachService:
                 "fallback_reason": fallback_reason or "service_unreachable",
                 "allocation_policy": str(allocation.get("policy") or "auto_balance"),
                 "allocation_reason": str(allocation.get("reason") or ""),
+                "allocation_warnings": list(allocation.get("allocation_warnings") or []),
+                "llm_device_preference": effective_llm_pref,
+                "tts_device_preference": effective_tts_pref,
             }
 
         if response.status_code >= 400:
@@ -2103,6 +2396,9 @@ class CoachService:
                 "fallback_reason": fallback_reason or "service_error",
                 "allocation_policy": str(allocation.get("policy") or "auto_balance"),
                 "allocation_reason": str(allocation.get("reason") or ""),
+                "allocation_warnings": list(allocation.get("allocation_warnings") or []),
+                "llm_device_preference": effective_llm_pref,
+                "tts_device_preference": effective_tts_pref,
             }
 
         payload: dict[str, Any] = {}
@@ -2137,6 +2433,9 @@ class CoachService:
             "fallback_reason": fallback_reason,
             "allocation_policy": str(allocation.get("policy") or "auto_balance"),
             "allocation_reason": str(allocation.get("reason") or ""),
+            "allocation_warnings": list(allocation.get("allocation_warnings") or []),
+            "llm_device_preference": effective_llm_pref,
+            "tts_device_preference": effective_tts_pref,
         }
 
     async def synthesize_reply_audio(
@@ -2152,6 +2451,9 @@ class CoachService:
         voice_profile_id: Optional[str] = None,
         reference_clip_id: Optional[str] = None,
         builtin_voice_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+        llm_device_preference: Optional[str] = "auto",
+        tts_device_preference: Optional[str] = "auto",
         user_id: Optional[int] = None,
     ) -> tuple[bytes, str]:
         normalized = re.sub(r"\s+", " ", str(text or "")).strip()
@@ -2164,10 +2466,32 @@ class CoachService:
             logger.debug("Sanitized coach TTS text from %s chars to %s chars", len(normalized), len(spoken_text))
 
         profile = self._coach_hardware_profile()
+        persisted_llm_pref = "auto"
+        persisted_tts_pref = "auto"
+        normalized_session_id = str(session_id or "").strip()
+        if normalized_session_id and user_id is not None:
+            session = await self.get_session(session_id=normalized_session_id, user_id=int(user_id))
+            if session is not None:
+                persisted_llm_pref = self._normalize_device_preference(
+                    getattr(session, "llm_device_preference", "auto")
+                )
+                persisted_tts_pref = self._normalize_device_preference(
+                    getattr(session, "tts_device_preference", "auto")
+                )
+        effective_llm_pref = self._effective_device_preference(
+            explicit_preference=llm_device_preference,
+            persisted_preference=persisted_llm_pref,
+        )
+        effective_tts_pref = self._effective_device_preference(
+            explicit_preference=tts_device_preference,
+            persisted_preference=persisted_tts_pref,
+        )
         allocation = self._runtime_allocation(
             profile=profile,
             mode="voice",
             preferred_model=preferred_model,
+            llm_device_preference=effective_llm_pref,
+            tts_device_preference=effective_tts_pref,
         )
         clipped = spoken_text
         resolved_provider = str(
@@ -3026,6 +3350,7 @@ class CoachService:
         focus_area: Optional[str] = None,
         recent_turns: Optional[Sequence[CoachTurn]] = None,
         persona_style: Optional[str] = None,
+        llm_device_preference: Optional[str] = None,
         asr_confidence_band: str = "high",
     ) -> tuple[dict[str, Any], int]:
         subject = str(focus_area or "").strip() or "General conversation"
@@ -3065,6 +3390,7 @@ class CoachService:
             "- Do not repeat the same coach sentence from the recent context.\n"
             "- Do not invent story context not present in transcript or selected subject.\n"
             "- If Persona instructions define a character identity, stay in that identity and never rename yourself.\n"
+            "- Be strict on language accuracy without judging intent. Never accuse the learner of avoidance, laziness, or bad faith.\n"
             "- Keep messages concise and natural."
         )
         user_prompt = (
@@ -3094,6 +3420,9 @@ class CoachService:
                 "num_predict": 90,
             },
         }
+        num_gpu = self._ollama_num_gpu_option(llm_device_preference)
+        if num_gpu is not None:
+            payload["options"]["num_gpu"] = num_gpu
         timeout = httpx.Timeout(
             connect=self.OLLAMA_CONNECT_TIMEOUT_SEC,
             read=max(10.0, float(settings.OLLAMA_CHAT_TIMEOUT_SEC)),
@@ -3142,6 +3471,7 @@ class CoachService:
         focus_area: Optional[str] = None,
         recent_turns: Optional[Sequence[CoachTurn]] = None,
         persona_style: Optional[str] = None,
+        llm_device_preference: Optional[str] = None,
     ) -> tuple[dict, int]:
         subject = str(focus_area or "").strip()
         persona = str(persona_style or "").strip()
@@ -3180,6 +3510,7 @@ class CoachService:
             "14) Add field response_translation (string). If native language is supported and different from target, translate your full coach message (reply + follow_up_question) into native language.\n"
             "15) If learner asks a direct question, answer it directly first, then ask one follow-up.\n"
             "16) Do not repeatedly say you did not understand unless the learner input is empty.\n"
+            "17) Stay respectful and non-judgmental. Be critical about language output, never about the learner's intent or effort.\n"
         )
         user_prompt = (
             f"Target language: {target_language}\n"
@@ -3206,6 +3537,9 @@ class CoachService:
                 "num_ctx": settings.OLLAMA_NUM_CTX,
             },
         }
+        num_gpu = self._ollama_num_gpu_option(llm_device_preference)
+        if num_gpu is not None:
+            payload["options"]["num_gpu"] = num_gpu
 
         timeout = httpx.Timeout(
             connect=self.OLLAMA_CONNECT_TIMEOUT_SEC,
@@ -3260,11 +3594,16 @@ class CoachService:
         transcript_hint: Optional[str] = None,
         preferred_model: Optional[str] = None,
         preferred_asr_model: Optional[str] = None,
+        llm_device_preference: Optional[str] = None,
         persona_style: Optional[str] = None,
     ) -> AsyncIterator[dict]:
         session = await self.get_session(session_id=str(session_id), user_id=user_id)
         if session is None:
             raise ValueError("Session not found")
+        effective_llm_device_preference = self._effective_device_preference(
+            explicit_preference=llm_device_preference,
+            persisted_preference=getattr(session, "llm_device_preference", "auto"),
+        )
 
         audio_bytes = await audio.read(self.COACH_MAX_AUDIO_BYTES + 1)
         if not audio_bytes:
@@ -3403,6 +3742,7 @@ class CoachService:
                         focus_area=session.focus_area,
                         recent_turns=session.turns,
                         persona_style=persona_style,
+                        llm_device_preference=effective_llm_device_preference,
                         asr_confidence_band=asr_confidence_band,
                     )
                     selected_model = model
@@ -3420,12 +3760,6 @@ class CoachService:
                     fast_output = fast_reply
                     if fast_follow_up and fast_follow_up not in fast_reply:
                         fast_output = f"{fast_reply.rstrip()} {fast_follow_up}".strip()
-                    fast_output = self._append_native_translation(
-                        message=fast_output,
-                        translation=str(fast_result.get("response_translation") or "").strip(),
-                        target_language=session.target_language,
-                        native_language=session.native_language,
-                    )
                     fast_output = self._apply_direct_question_guard(
                         transcript=transcript,
                         candidate_reply=fast_output,
@@ -3440,6 +3774,13 @@ class CoachService:
                         learner_level=session.cefr_level,
                         focus_area=session.focus_area,
                         learner_transcript=transcript,
+                    )
+                    fast_output = self._sanitize_coach_tone(fast_output)
+                    fast_output = self._append_native_translation(
+                        message=fast_output,
+                        translation=str(fast_result.get("response_translation") or "").strip(),
+                        target_language=session.target_language,
+                        native_language=session.native_language,
                     )
                     if fast_output:
                         yield {
@@ -3458,6 +3799,7 @@ class CoachService:
                     focus_area=session.focus_area,
                     recent_turns=session.turns,
                     persona_style=persona_style,
+                    llm_device_preference=effective_llm_device_preference,
                 )
                 if (not two_pass_enabled) and observed_latency > self.default_latency_budget_ms and idx + 1 < len(candidates):
                     if respect_user_model_choice and model == requested_model:
@@ -3529,6 +3871,16 @@ class CoachService:
             target_language=session.target_language,
             persona_style=persona_style,
         )
+        final_reply = self._prevent_repeat_loop(
+            candidate_reply=final_reply,
+            last_coach_reply=last_coach_reply,
+            target_language=session.target_language,
+            native_language=session.native_language,
+            learner_level=session.cefr_level,
+            focus_area=session.focus_area,
+            learner_transcript=transcript,
+        )
+        final_reply = self._sanitize_coach_tone(final_reply)
         final_reply = self._append_native_translation(
             message=final_reply,
             translation=str(
@@ -3538,15 +3890,6 @@ class CoachService:
             ).strip(),
             target_language=session.target_language,
             native_language=session.native_language,
-        )
-        final_reply = self._prevent_repeat_loop(
-            candidate_reply=final_reply,
-            last_coach_reply=last_coach_reply,
-            target_language=session.target_language,
-            native_language=session.native_language,
-            learner_level=session.cefr_level,
-            focus_area=session.focus_area,
-            learner_transcript=transcript,
         )
 
         if not fast_coaching_result:
@@ -3642,11 +3985,16 @@ class CoachService:
         session_id: str,
         text: str,
         preferred_model: Optional[str] = None,
+        llm_device_preference: Optional[str] = None,
         persona_style: Optional[str] = None,
     ) -> dict[str, Any]:
         session = await self.get_session(session_id=str(session_id), user_id=user_id)
         if session is None:
             raise ValueError("Session not found")
+        effective_llm_device_preference = self._effective_device_preference(
+            explicit_preference=llm_device_preference,
+            persisted_preference=getattr(session, "llm_device_preference", "auto"),
+        )
 
         transcript = re.sub(r"\s+", " ", str(text or "")).strip()
         if not transcript:
@@ -3681,6 +4029,7 @@ class CoachService:
                     focus_area=session.focus_area,
                     recent_turns=session.turns,
                     persona_style=persona_style,
+                    llm_device_preference=effective_llm_device_preference,
                 )
                 selected_model = model
                 coaching_result = result
@@ -3728,12 +4077,6 @@ class CoachService:
             target_language=session.target_language,
             persona_style=persona_style,
         )
-        final_reply = self._append_native_translation(
-            message=final_reply,
-            translation=str(coaching_result.get("response_translation") or "").strip(),
-            target_language=session.target_language,
-            native_language=session.native_language,
-        )
         final_reply = self._prevent_repeat_loop(
             candidate_reply=final_reply,
             last_coach_reply=last_coach_reply,
@@ -3742,6 +4085,13 @@ class CoachService:
             learner_level=session.cefr_level,
             focus_area=session.focus_area,
             learner_transcript=transcript,
+        )
+        final_reply = self._sanitize_coach_tone(final_reply)
+        final_reply = self._append_native_translation(
+            message=final_reply,
+            translation=str(coaching_result.get("response_translation") or "").strip(),
+            target_language=session.target_language,
+            native_language=session.native_language,
         )
         explanation = str(coaching_result.get("explanation") or "").strip()
         if lt_findings:

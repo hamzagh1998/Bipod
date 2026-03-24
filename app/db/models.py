@@ -97,6 +97,8 @@ class CoachSession(Base):
     audio_retention_opt_in: Mapped[bool] = mapped_column(Boolean, default=False)
     focus_area: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     model_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    llm_device_preference: Mapped[str] = mapped_column(String, default="auto")
+    tts_device_preference: Mapped[str] = mapped_column(String, default="auto")
     voice_profile_id: Mapped[Optional[str]] = mapped_column(ForeignKey("coach_voice_profiles.id"), nullable=True)
     status: Mapped[str] = mapped_column(String, default="active")
     created_at: Mapped[datetime.datetime] = mapped_column(DateTime, server_default=func.now())

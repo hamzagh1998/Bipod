@@ -81,6 +81,18 @@ def _apply_sqlite_schema_patches(conn) -> None:
             "voice_profile_id",
             "voice_profile_id VARCHAR",
         )
+        _ensure_sqlite_column(
+            conn,
+            "coach_sessions",
+            "llm_device_preference",
+            "llm_device_preference VARCHAR NOT NULL DEFAULT 'auto'",
+        )
+        _ensure_sqlite_column(
+            conn,
+            "coach_sessions",
+            "tts_device_preference",
+            "tts_device_preference VARCHAR NOT NULL DEFAULT 'auto'",
+        )
 
     if "coach_turns" in tables:
         _ensure_sqlite_column(

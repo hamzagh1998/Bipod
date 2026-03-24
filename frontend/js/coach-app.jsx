@@ -160,6 +160,17 @@ const TTS_PROVIDER_OPTIONS = [
   { value: "openvoice", label: "OpenVoice (fast clone / CPU)" },
   { value: "espeak", label: "Local espeak (fastest)" },
 ];
+const DEVICE_PREFERENCE_OPTIONS = [
+  { value: "auto", label: "Auto (runtime)" },
+  { value: "cpu", label: "CPU / RAM" },
+  { value: "cuda", label: "GPU / VRAM" },
+];
+const TTS_KEEPALIVE_INTERVAL_MS = 45000;
+const RUNTIME_STATUS_POLL_MS_TEXT = 45000;
+const RUNTIME_STATUS_POLL_MS_VOICE = 20000;
+const RUNTIME_STATUS_POLL_MS_IDLE = 90000;
+const TTS_STATUS_POLL_MS_ACTIVE = 60000;
+const TTS_STATUS_POLL_MS_IDLE = 180000;
 
 const DEFAULT_SERVER_VOICE = SERVER_VOICE_OPTIONS[0].id;
 const DEFAULT_BUILTIN_VOICE_CHOICE = "builtin:anby";
@@ -432,8 +443,15 @@ function normalizeRuntimeStatus(payload) {
     state: String(source.state || "idle"),
     allocationPolicy: String(source.allocation_policy || ""),
     allocationReason: String(source.allocation_reason || ""),
+    allocationWarnings: Array.isArray(source.allocation_warnings)
+      ? source.allocation_warnings
+          .map((item) => String(item || "").trim())
+          .filter((item) => Boolean(item))
+      : [],
     llmDevice: String(source.llm_device || ""),
     ttsDevice: String(source.tts_device || ""),
+    llmDevicePreference: String(source.llm_device_preference || "auto"),
+    ttsDevicePreference: String(source.tts_device_preference || "auto"),
     vramSnapshot:
       source.vram_snapshot && typeof source.vram_snapshot === "object"
         ? {
@@ -685,6 +703,8 @@ function CoachApp() {
   const [preferredModel, setPreferredModel] = useState("auto");
   const [preferredAsrModel, setPreferredAsrModel] = useState("auto");
   const [preferredTtsProvider, setPreferredTtsProvider] = useState("auto");
+  const [preferredLlmDevice, setPreferredLlmDevice] = useState("auto");
+  const [preferredTtsDevice, setPreferredTtsDevice] = useState("auto");
   const [lastUsedLlmModel, setLastUsedLlmModel] = useState("");
   const [lastUsedAsrModel, setLastUsedAsrModel] = useState("");
 
@@ -706,6 +726,9 @@ function CoachApp() {
   const ttsRequestSeqRef = useRef(0);
   const ttsInFlightRef = useRef(false);
   const pendingTtsTextRef = useRef("");
+  const ttsKeepaliveInFlightRef = useRef(false);
+  const runtimePollInFlightRef = useRef(false);
+  const ttsStatusPollInFlightRef = useRef(false);
 
   const selectedSubject = useMemo(() => {
     if (subjectChoice !== "Custom") {
@@ -793,10 +816,21 @@ function CoachApp() {
         String(runtimeStatus.allocationPolicy || profile.allocationPolicy || "")
           .trim() || "auto_balance",
       allocationReason: String(runtimeStatus.allocationReason || "").trim(),
+      allocationWarnings: Array.isArray(runtimeStatus.allocationWarnings)
+        ? runtimeStatus.allocationWarnings
+        : [],
+      llmDevicePreference:
+        String(runtimeStatus.llmDevicePreference || preferredLlmDevice || "auto").trim() ||
+        "auto",
+      ttsDevicePreference:
+        String(runtimeStatus.ttsDevicePreference || preferredTtsDevice || "auto").trim() ||
+        "auto",
     };
   }, [
     runtimeStatus,
     preferredModel,
+    preferredLlmDevice,
+    preferredTtsDevice,
     lastUsedLlmModel,
     lastUsedAsrModel,
     ttsStatus.provider,
@@ -880,6 +914,8 @@ function CoachApp() {
     const selectedAsr = String(preferredAsrModel || "")
       .trim()
       .toLowerCase();
+    const selectedLlmDevice = String(preferredLlmDevice || "").trim().toLowerCase() || "auto";
+    const selectedTtsDevice = String(preferredTtsDevice || "").trim().toLowerCase() || "auto";
     const defaultLlm = String(
       profile.llmPrimaryModel || runtimeSelection.llmModel || "",
     ).trim();
@@ -913,6 +949,9 @@ function CoachApp() {
     )
       .trim()
       .toLowerCase();
+    const allocationWarnings = Array.isArray(runtimeStatus.allocationWarnings)
+      ? runtimeStatus.allocationWarnings
+      : [];
 
     if (allocationReason === "manual_llm_pin") {
       warnings.push(
@@ -932,6 +971,25 @@ function CoachApp() {
       warnings.push("Runtime policy prioritizes LLM quality over TTS speed.");
     } else if (allocationPolicy === "prioritize_tts") {
       warnings.push("Runtime policy prioritizes TTS speed over LLM GPU usage.");
+    }
+    if (selectedLlmDevice === "cpu") {
+      warnings.push("LLM is pinned to CPU/RAM and may respond slower.");
+    }
+    if (selectedTtsDevice === "cpu") {
+      warnings.push("TTS is pinned to CPU/RAM and may speak slower.");
+    }
+    if (selectedLlmDevice === "cuda" && runtimeSelection.llmModel) {
+      warnings.push(
+        `LLM is pinned to GPU for ${runtimeSelection.llmModel}; this can reduce VRAM available for other components.`,
+      );
+    }
+    if (selectedTtsDevice === "cuda" && runtimeSelection.ttsDevice !== "cuda") {
+      warnings.push("TTS GPU was requested but is not currently active.");
+    }
+    for (const item of allocationWarnings) {
+      if (String(item || "").trim()) {
+        warnings.push(String(item).trim());
+      }
     }
 
     if (
@@ -964,8 +1022,11 @@ function CoachApp() {
   }, [
     preferredModel,
     preferredAsrModel,
+    preferredLlmDevice,
+    preferredTtsDevice,
     runtimeStatus,
     runtimeSelection.llmModel,
+    runtimeSelection.ttsDevice,
     ttsStatus.fallbackReason,
   ]);
 
@@ -1074,29 +1135,99 @@ function CoachApp() {
       if (cancelled) {
         return;
       }
-      const shouldWarmTts = Boolean(sessionId) && viewMode === "voice";
-      await refreshTtsStatus({ warm: shouldWarmTts, silent: true });
+      if (runtimePollInFlightRef.current) {
+        return;
+      }
+      if (typeof document !== "undefined" && document.hidden) {
+        return;
+      }
+      runtimePollInFlightRef.current = true;
       const runtimeMode = sessionId
         ? viewMode === "voice"
           ? "voice"
           : "text"
         : "idle";
-      await refreshRuntimeStatus({
-        warm: false,
-        mode: runtimeMode,
-        silent: true,
-      });
+      try {
+        await refreshRuntimeStatus({
+          warm: false,
+          mode: runtimeMode,
+          silent: true,
+        });
+      } finally {
+        runtimePollInFlightRef.current = false;
+      }
     };
     void poll();
+    const pollIntervalMs = sessionId
+      ? viewMode === "voice"
+        ? RUNTIME_STATUS_POLL_MS_VOICE
+        : RUNTIME_STATUS_POLL_MS_TEXT
+      : RUNTIME_STATUS_POLL_MS_IDLE;
     const intervalId = window.setInterval(() => {
       void poll();
-    }, 12000);
+    }, pollIntervalMs);
     return () => {
       cancelled = true;
+      runtimePollInFlightRef.current = false;
       window.clearInterval(intervalId);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [authState, token, sessionId, viewMode, preferredModel, preferredTtsProvider]);
+  }, [
+    authState,
+    token,
+    sessionId,
+    viewMode,
+    preferredModel,
+    preferredTtsProvider,
+    preferredLlmDevice,
+    preferredTtsDevice,
+  ]);
+
+  useEffect(() => {
+    if (authState !== "ready" || !token) {
+      return;
+    }
+
+    let cancelled = false;
+    const poll = async () => {
+      if (cancelled) {
+        return;
+      }
+      if (ttsStatusPollInFlightRef.current) {
+        return;
+      }
+      if (typeof document !== "undefined" && document.hidden) {
+        return;
+      }
+      ttsStatusPollInFlightRef.current = true;
+      try {
+        await refreshTtsStatus({ warm: false, silent: true });
+      } finally {
+        ttsStatusPollInFlightRef.current = false;
+      }
+    };
+
+    void poll();
+    const pollIntervalMs = sessionId ? TTS_STATUS_POLL_MS_ACTIVE : TTS_STATUS_POLL_MS_IDLE;
+    const intervalId = window.setInterval(() => {
+      void poll();
+    }, pollIntervalMs);
+
+    return () => {
+      cancelled = true;
+      ttsStatusPollInFlightRef.current = false;
+      window.clearInterval(intervalId);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    authState,
+    token,
+    sessionId,
+    preferredModel,
+    preferredTtsProvider,
+    preferredLlmDevice,
+    preferredTtsDevice,
+  ]);
 
   useEffect(() => {
     if (!sessionId || !token || authState !== "ready") {
@@ -1105,6 +1236,71 @@ function CoachApp() {
     const mode = viewMode === "voice" ? "voice" : "text";
     void preloadCoachRuntime(mode, { silent: true });
   }, [sessionId, viewMode, token, authState]);
+
+  useEffect(() => {
+    if (
+      authState !== "ready" ||
+      !token ||
+      !sessionId ||
+      viewMode !== "voice" ||
+      conversationEnded ||
+      isEnding
+    ) {
+      return;
+    }
+
+    const provider = String(selectedTtsProvider || "").trim().toLowerCase();
+    if (!provider || provider === "espeak") {
+      return;
+    }
+    const preference = String(preferredTtsDevice || "auto").trim().toLowerCase();
+    const runtimeTtsDevice = String(runtimeSelection.ttsDevice || "").trim().toLowerCase();
+    const gpuPinned =
+      preference === "cuda" ||
+      (preference === "auto" && runtimeTtsDevice === "cuda");
+    if (!gpuPinned) {
+      return;
+    }
+
+    let cancelled = false;
+    const tick = async () => {
+      if (cancelled || ttsKeepaliveInFlightRef.current) {
+        return;
+      }
+      if (isRecording || isSending || isEnding || ttsInFlightRef.current) {
+        return;
+      }
+      ttsKeepaliveInFlightRef.current = true;
+      try {
+        await refreshTtsStatus({ warm: true, silent: true });
+      } finally {
+        ttsKeepaliveInFlightRef.current = false;
+      }
+    };
+
+    const intervalId = window.setInterval(() => {
+      void tick();
+    }, TTS_KEEPALIVE_INTERVAL_MS);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+      ttsKeepaliveInFlightRef.current = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    authState,
+    token,
+    sessionId,
+    viewMode,
+    conversationEnded,
+    isRecording,
+    isSending,
+    isEnding,
+    preferredTtsDevice,
+    selectedTtsProvider,
+    runtimeSelection.ttsDevice,
+  ]);
 
   useEffect(() => {
     if (preferredModel === "auto") {
@@ -1128,6 +1324,22 @@ function CoachApp() {
     }
     setPreferredTtsProvider("auto");
   }, [preferredTtsProvider]);
+
+  useEffect(() => {
+    const normalized = String(preferredLlmDevice || "").trim().toLowerCase();
+    if (normalized === "auto" || normalized === "cpu" || normalized === "cuda") {
+      return;
+    }
+    setPreferredLlmDevice("auto");
+  }, [preferredLlmDevice]);
+
+  useEffect(() => {
+    const normalized = String(preferredTtsDevice || "").trim().toLowerCase();
+    if (normalized === "auto" || normalized === "cpu" || normalized === "cuda") {
+      return;
+    }
+    setPreferredTtsDevice("auto");
+  }, [preferredTtsDevice]);
 
   useEffect(() => {
     activeLanguageRef.current = activeLanguage || languageChoice || "English";
@@ -1429,6 +1641,15 @@ function CoachApp() {
     if (preferredTtsProvider && preferredTtsProvider !== "auto") {
       query.set("preferred_tts_provider", preferredTtsProvider);
     }
+    if (sessionId) {
+      query.set("session_id", sessionId);
+    }
+    if (preferredLlmDevice && preferredLlmDevice !== "auto") {
+      query.set("llm_device_preference", preferredLlmDevice);
+    }
+    if (preferredTtsDevice && preferredTtsDevice !== "auto") {
+      query.set("tts_device_preference", preferredTtsDevice);
+    }
     const path = `/api/v1/coach/tts/status${query.toString() ? `?${query.toString()}` : ""}`;
     try {
       const payload = await apiFetchJson(path, token);
@@ -1479,6 +1700,15 @@ function CoachApp() {
     if (preferredTtsProvider && preferredTtsProvider !== "auto") {
       query.set("preferred_tts_provider", preferredTtsProvider);
     }
+    if (sessionId) {
+      query.set("session_id", sessionId);
+    }
+    if (preferredLlmDevice && preferredLlmDevice !== "auto") {
+      query.set("llm_device_preference", preferredLlmDevice);
+    }
+    if (preferredTtsDevice && preferredTtsDevice !== "auto") {
+      query.set("tts_device_preference", preferredTtsDevice);
+    }
     const path = `/api/v1/coach/runtime/status${query.toString() ? `?${query.toString()}` : ""}`;
     try {
       const payload = await apiFetchJson(path, token);
@@ -1517,6 +1747,73 @@ function CoachApp() {
     }
   }
 
+  async function updateSessionRuntimeSettings({
+    nextModel = preferredModel,
+    nextLlmDevice = preferredLlmDevice,
+    nextTtsDevice = preferredTtsDevice,
+  } = {}) {
+    if (!token || !sessionId) {
+      return null;
+    }
+    try {
+      const payload = await apiFetchJson(
+        `/api/v1/coach/sessions/${sessionId}/settings`,
+        token,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            model_id: nextModel !== "auto" ? String(nextModel || "").trim() || null : null,
+            llm_device_preference: nextLlmDevice || "auto",
+            tts_device_preference: nextTtsDevice || "auto",
+          }),
+        },
+      );
+      setSessions((prev) =>
+        prev.map((item) =>
+          item.id === sessionId
+            ? {
+                ...item,
+                model_id: payload?.model_id ?? null,
+                llm_device_preference:
+                  String(payload?.llm_device_preference || "auto") || "auto",
+                tts_device_preference:
+                  String(payload?.tts_device_preference || "auto") || "auto",
+              }
+            : item,
+        ),
+      );
+      return payload;
+    } catch (error) {
+      setErrorMessage(error?.message || "Could not save runtime device settings.");
+      return null;
+    }
+  }
+
+  function handlePreferredModelChange(nextValue) {
+    const normalized = String(nextValue || "auto").trim() || "auto";
+    setPreferredModel(normalized);
+    if (sessionId) {
+      void updateSessionRuntimeSettings({ nextModel: normalized });
+    }
+  }
+
+  function handleLlmDevicePreferenceChange(nextValue) {
+    const normalized = String(nextValue || "auto").trim().toLowerCase() || "auto";
+    setPreferredLlmDevice(normalized);
+    if (sessionId) {
+      void updateSessionRuntimeSettings({ nextLlmDevice: normalized });
+    }
+  }
+
+  function handleTtsDevicePreferenceChange(nextValue) {
+    const normalized = String(nextValue || "auto").trim().toLowerCase() || "auto";
+    setPreferredTtsDevice(normalized);
+    if (sessionId) {
+      void updateSessionRuntimeSettings({ nextTtsDevice: normalized });
+    }
+  }
+
   function hydrateSession(record, loadedTurns = []) {
     const subject =
       String(record?.focus_area || record?.title || "Conversation").trim() ||
@@ -1527,6 +1824,12 @@ function CoachApp() {
     const learnerLevel = normalizeLearnerLevel(record?.cefr_level || "medium");
     const status = String(record?.status || "active").trim() || "active";
     const linkedModelId = String(record?.model_id || "").trim();
+    const linkedLlmDevicePreference =
+      String(record?.llm_device_preference || "auto").trim().toLowerCase() ||
+      "auto";
+    const linkedTtsDevicePreference =
+      String(record?.tts_device_preference || "auto").trim().toLowerCase() ||
+      "auto";
 
     setSessionId(String(record?.id || ""));
     setActiveSubject(subject);
@@ -1548,6 +1851,16 @@ function CoachApp() {
     setPreferredModel(linkedModelId || "auto");
     setPreferredAsrModel("auto");
     setPreferredTtsProvider("auto");
+    setPreferredLlmDevice(
+      linkedLlmDevicePreference === "cpu" || linkedLlmDevicePreference === "cuda"
+        ? linkedLlmDevicePreference
+        : "auto",
+    );
+    setPreferredTtsDevice(
+      linkedTtsDevicePreference === "cpu" || linkedTtsDevicePreference === "cuda"
+        ? linkedTtsDevicePreference
+        : "auto",
+    );
     setConversationEnded(status === "completed");
     setShowSessionSettings(false);
     setStarterQuestion(
@@ -1788,6 +2101,9 @@ function CoachApp() {
           ? referenceClipId || null
           : null,
       builtin_voice_id: parsedVoice.builtinVoiceId || null,
+      session_id: sessionId || null,
+      llm_device_preference: preferredLlmDevice || "auto",
+      tts_device_preference: preferredTtsDevice || "auto",
     };
 
     try {
@@ -2006,6 +2322,8 @@ function CoachApp() {
           focus_area: selectedSubject,
           model_id: preferredModel !== "auto" ? preferredModel : null,
           voice_profile_id: linkedProfileId,
+          llm_device_preference: preferredLlmDevice,
+          tts_device_preference: preferredTtsDevice,
         }),
       });
 
@@ -2184,6 +2502,9 @@ function CoachApp() {
       }
       if (preferredAsrModel !== "auto") {
         formData.append("preferred_asr_model", preferredAsrModel);
+      }
+      if (preferredLlmDevice && preferredLlmDevice !== "auto") {
+        formData.append("llm_device_preference", preferredLlmDevice);
       }
 
       const response = await fetch("/api/v1/coach/turns/stream", {
@@ -2465,6 +2786,7 @@ function CoachApp() {
           session_id: sessionId,
           text: message,
           preferred_model: preferredModel !== "auto" ? preferredModel : null,
+          llm_device_preference: preferredLlmDevice || "auto",
           persona_style: activePersona.prompt,
         }),
       });
@@ -2595,6 +2917,8 @@ function CoachApp() {
     setPreferredModel("auto");
     setPreferredAsrModel("auto");
     setPreferredTtsProvider("auto");
+    setPreferredLlmDevice("auto");
+    setPreferredTtsDevice("auto");
     setLastUsedLlmModel("");
     setLastUsedAsrModel("");
     setVoiceChoice((current) => {
@@ -2784,6 +3108,10 @@ function CoachApp() {
                 ? ` (${runtimeSelection.allocationReason})`
                 : ""}
             </span>
+            <span>
+              <strong>Device prefs:</strong> LLM {preferredLlmDevice} · TTS{" "}
+              {preferredTtsDevice}
+            </span>
           </div>
         </div>
 
@@ -2880,12 +3208,27 @@ function CoachApp() {
             <select
               id="llm-model-select"
               value={preferredModel}
-              onChange={(event) => setPreferredModel(event.target.value)}
+              onChange={(event) => handlePreferredModelChange(event.target.value)}
             >
               <option value="auto">Auto ({runtimeSelection.llmModel})</option>
               {llmModelOptions.map((model) => (
                 <option key={model} value={model}>
                   {model}
+                </option>
+              ))}
+            </select>
+
+            <label htmlFor="llm-device-select">LLM device</label>
+            <select
+              id="llm-device-select"
+              value={preferredLlmDevice}
+              onChange={(event) =>
+                handleLlmDevicePreferenceChange(event.target.value)
+              }
+            >
+              {DEVICE_PREFERENCE_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
                 </option>
               ))}
             </select>
@@ -2914,6 +3257,21 @@ function CoachApp() {
                   {option.value === "auto"
                     ? `${option.label} (${runtimeSelection.ttsProvider})`
                     : option.label}
+                </option>
+              ))}
+            </select>
+
+            <label htmlFor="tts-device-select">TTS device</label>
+            <select
+              id="tts-device-select"
+              value={preferredTtsDevice}
+              onChange={(event) =>
+                handleTtsDevicePreferenceChange(event.target.value)
+              }
+            >
+              {DEVICE_PREFERENCE_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
                 </option>
               ))}
             </select>
@@ -3116,7 +3474,9 @@ function CoachApp() {
                   <select
                     id="session-llm-model-select"
                     value={preferredModel}
-                    onChange={(event) => setPreferredModel(event.target.value)}
+                    onChange={(event) =>
+                      handlePreferredModelChange(event.target.value)
+                    }
                   >
                     <option value="auto">
                       Auto ({runtimeSelection.llmModel})
@@ -3124,6 +3484,21 @@ function CoachApp() {
                     {llmModelOptions.map((model) => (
                       <option key={model} value={model}>
                         {model}
+                      </option>
+                    ))}
+                  </select>
+
+                  <label htmlFor="session-llm-device-select">LLM device</label>
+                  <select
+                    id="session-llm-device-select"
+                    value={preferredLlmDevice}
+                    onChange={(event) =>
+                      handleLlmDevicePreferenceChange(event.target.value)
+                    }
+                  >
+                    {DEVICE_PREFERENCE_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
                       </option>
                     ))}
                   </select>
@@ -3156,6 +3531,21 @@ function CoachApp() {
                         {option.value === "auto"
                           ? `${option.label} (${runtimeSelection.ttsProvider})`
                           : option.label}
+                      </option>
+                    ))}
+                  </select>
+
+                  <label htmlFor="session-tts-device-select">TTS device</label>
+                  <select
+                    id="session-tts-device-select"
+                    value={preferredTtsDevice}
+                    onChange={(event) =>
+                      handleTtsDevicePreferenceChange(event.target.value)
+                    }
+                  >
+                    {DEVICE_PREFERENCE_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
                       </option>
                     ))}
                   </select>

@@ -142,6 +142,17 @@ You can override the automatic picks:
 - `COACH_WHISPER_FAST_MODEL=...`
 - `COACH_WHISPER_ACCURATE_MODEL=...`
 - `HEAVY_MODEL`, `SMART_MODEL`, `MEDIUM_MODEL`, `LIGHT_MODEL` (for Ollama pulls)
+- `COACH_COSYVOICE_TORCH_INDEX_URL=https://download.pytorch.org/whl/cu121|cpu`
+- `COACH_OPENVOICE_TORCH_INDEX_URL=https://download.pytorch.org/whl/cu121|cpu`
+- `COACH_COSYVOICE_LOCAL_AFTER_CACHE=true|false` (default: `true`)
+
+Notes on TTS Torch wheels:
+
+- TTS images now default to CUDA wheels (`cu121`) so the same container can run on GPU (when available) or CPU (fallback or manual CPU selection).
+- If you explicitly want CPU-only wheels, set:
+  - `COACH_COSYVOICE_TORCH_INDEX_URL=https://download.pytorch.org/whl/cpu`
+  - `COACH_OPENVOICE_TORCH_INDEX_URL=https://download.pytorch.org/whl/cpu`
+- With `COACH_COSYVOICE_LOCAL_AFTER_CACHE=true`, CosyVoice downloads missing assets once, then uses cached local files on later warmups/loads.
 
 Threshold guidance:
 
@@ -172,6 +183,7 @@ Current preload behavior:
 - `voice` mode warms Ollama + ASR (fast model) + TTS
 - `text` mode warms Ollama (and optional LanguageTool sidecar)
 - `idle` mode only reports status, no warmup
+- Coach UI uses periodic status polling without warm triggers; GPU TTS keepalive uses guarded low-frequency warm pings (every 45s) only during active voice sessions.
 
 Runtime status now returns an inferred coach profile (`cpu`, `gpu_constrained`, `gpu_full`) and the selected ASR/TTS device strategy so UI/services can stay predictable across hardware tiers.
 

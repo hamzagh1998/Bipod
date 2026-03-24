@@ -133,7 +133,7 @@ class BrainService:
             "4. DO NOT explain why you are using a tool unless it's a complex multi-step process.\n"
             "5. Use specialized tools (save_file, generate_image, search_files, read_file) for all tasks.\n"
             "6. EACH CONVERSATION IS INDEPENDENT. Do not mix up content from different sessions.\n"
-            "7. For image generation, the `model_type` MUST be one of: 'sdxl-lightning' (fast, default), 'flux-schnell' (photoreal - requires high VRAM), 'stable-diffusion' (balanced), or 'dalle-mini' (low resource). DO NOT use any other words for `model_type`.\n"
+            "7. For image generation, the `model_type` MUST be one of: 'sdxl-lightning' (fast, default), 'juggernaut-xl' (high quality SDXL), 'flux-schnell' (photoreal - requires high VRAM), 'stable-diffusion' (balanced), or 'dalle-mini' (low resource). DO NOT use any other words for `model_type`.\n"
             "8. ALWAYS provide the actual file path returned by the tool when confirming a task (e.g. 'Image saved to /app/data/...'). If an image was generated, you MUST include the markdown preview (e.g. ![Generated Image](/generated/filename.jpg)) EXACTLY as returned by the tool so the user can see it in the chat.\n"
             "[SYSTEM: TOOLS]\n1. `read_file`: Reads text/PDF from the host. \n2. `save_file`: Writes text to the host. \n3. `move_file`: Moves/renames files/dirs on the host. Supports wildcards (e.g. *.pdf). \n4. `delete_file`: Deletes files/dirs on the host. Supports wildcards. \n5. `search_files`: Finds files by pattern. \n6. `get_system_info`: Returns CPU/GPU usage, model info, and current time. \n7. `web_search`: Searches the internet. \n8. `fetch_web_page`: Reads a URL.\n9. `organize_files`: Automatically sorts files in a directory into folders by their extension (e.g. 'pdf/', 'docx/').\n\n"
             "- THE USER CANNOT SEE YOUR TOOL CALLS. If you narrate them, you are talking to yourself and confusing the user.\n"
@@ -229,7 +229,7 @@ class BrainService:
                         "properties": {
                             "prompt": {"type": "string", "description": "Description of the image. For best results, Bipod will expand this with quality tags like 'cinematic lighting, 8k, highly detailed, masterpiece'."},
                             "image_path": {"type": "string", "description": "Optional. Path to an existing image file to use for variations."},
-                            "model_type": {"type": "string", "enum": ["sdxl-lightning", "flux-schnell", "stable-diffusion", "dalle-mini"], "description": "Model to use. Default 'sdxl-lightning'."},
+                            "model_type": {"type": "string", "enum": ["sdxl-lightning", "juggernaut-xl", "flux-schnell", "stable-diffusion", "dalle-mini"], "description": "Model to use. Default 'sdxl-lightning'. 'juggernaut-xl' offers higher quality SDXL output."},
                         },
                         "required": ["prompt"],
                     },

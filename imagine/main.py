@@ -3,6 +3,7 @@ import gc
 import binascii
 import glob
 import sys
+import time
 
 os.environ["HF_HUB_DISABLE_SYMLINKS"] = "1"
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
@@ -98,6 +99,7 @@ MODEL_REPO_MAP = {
     "dalle-mini":       "segmind/tiny-sd",
     "stable-diffusion": "SG161222/Realistic_Vision_V6.0_B1_noVAE",
     "sdxl-lightning":   "ByteDance/SDXL-Lightning",
+    "juggernaut-xl":    "RunDiffusion/Juggernaut-XL-v9",
     "flux-schnell":     "black-forest-labs/FLUX.1-schnell",
 }
 SDXL_BASE_REPO = "stabilityai/stable-diffusion-xl-base-1.0"
@@ -137,6 +139,27 @@ def get_device() -> str:
     if torch.backends.mps.is_available():
         return "mps"
     return "cpu"
+
+
+def _is_cuda_busy_error(exc: Exception) -> bool:
+    """Detect CUDA 'busy or unavailable' errors (distinct from OOM)."""
+    return isinstance(exc, RuntimeError) and "busy or unavailable" in str(exc).lower()
+
+
+def warmup_cuda_context():
+    """Force-initialise the CUDA context so later allocations don't race
+    with other containers that share the same GPU."""
+    if not torch.cuda.is_available():
+        return
+    try:
+        torch.cuda.init()
+        # A tiny allocation is enough to pin the CUDA context in this process.
+        _probe = torch.zeros(1, device="cuda")
+        del _probe
+        torch.cuda.empty_cache()
+        logger.info("CUDA context warmed up successfully")
+    except RuntimeError as e:
+        logger.warning("CUDA warmup failed: %s", e)
 
 
 def get_vram_info() -> Optional[dict]:
@@ -774,18 +797,34 @@ def _apply_optimizations(
         pipe.enable_attention_slicing(slice_size="auto")
         logger.info(f"{pfx}✓ Attention slicing enabled")
 
-    if use_seq:
-        pipe.enable_sequential_cpu_offload()
-        logger.info(f"{pfx}✓ Sequential CPU offload enabled")
-    else:
-        pipe.enable_model_cpu_offload()
-        logger.info(f"{pfx}✓ Model CPU offload enabled")
+    offload_fn = pipe.enable_sequential_cpu_offload if use_seq else pipe.enable_model_cpu_offload
+    offload_label = "Sequential" if use_seq else "Model"
+    max_retries = 3
+    for attempt in range(1, max_retries + 1):
+        try:
+            offload_fn()
+            logger.info(f"{pfx}✓ {offload_label} CPU offload enabled")
+            break
+        except RuntimeError as e:
+            if _is_cuda_busy_error(e) and attempt < max_retries:
+                wait = 2 * attempt
+                logger.warning(
+                    "%sCUDA busy during %s offload (attempt %d/%d); "
+                    "retrying in %ds...",
+                    pfx, offload_label, attempt, max_retries, wait,
+                )
+                aggressive_cleanup()
+                warmup_cuda_context()
+                time.sleep(wait)
+            else:
+                raise
 
 
 def load_sdxl_pipeline(repo_id: str, device: str, vram_tier: Optional[str], model_type: Optional[str] = None):
     global txt2img_pipe, img2img_pipe
 
     is_lightning = model_type == "sdxl-lightning"
+    is_juggernaut = model_type == "juggernaut-xl"
     is_tiny = model_type == "dalle-mini"
     is_single_file_sd = model_type == "stable-diffusion"
     base_repo_id = SDXL_BASE_REPO if is_lightning else repo_id
@@ -798,7 +837,7 @@ def load_sdxl_pipeline(repo_id: str, device: str, vram_tier: Optional[str], mode
         "low_cpu_mem_usage": True,
     }
 
-    is_xl = is_lightning
+    is_xl = is_lightning or is_juggernaut
     pipeline_kwargs = dict(common)
 
     # The filtered RV V6 cache intentionally skips the safety checker weights.
@@ -875,7 +914,7 @@ def load_sdxl_pipeline(repo_id: str, device: str, vram_tier: Optional[str], mode
             logger.info("✓ SDXL-Lightning UNet loaded")
 
         # Scheduler — before from_pipe() so img2img inherits it
-        if is_lightning:
+        if is_lightning or is_juggernaut:
             txt2img_pipe.scheduler = EulerDiscreteScheduler.from_config(
                 txt2img_pipe.scheduler.config, timestep_spacing="trailing"
             )
@@ -914,7 +953,7 @@ def load_sdxl_pipeline(repo_id: str, device: str, vram_tier: Optional[str], mode
         else:
             txt2img_pipe = AutoPipelineForText2Image.from_pretrained(base_repo_id, **pipeline_kwargs)
 
-        if is_lightning:
+        if is_lightning or is_juggernaut:
             logger.info("Applying SDXL-Lightning 4-step UNet weights...")
             lightning_unet_path = hf_hub_download(
                 repo_id=SDXL_LIGHTNING_REPO,
@@ -930,7 +969,7 @@ def load_sdxl_pipeline(repo_id: str, device: str, vram_tier: Optional[str], mode
                 logger.warning(f"Missing SDXL-Lightning UNet keys: {len(missing)}")
             logger.info("✓ SDXL-Lightning UNet loaded")
 
-        if is_lightning:
+        if is_lightning or is_juggernaut:
             txt2img_pipe.scheduler = EulerDiscreteScheduler.from_config(
                 txt2img_pipe.scheduler.config, timestep_spacing="trailing"
             )
@@ -1102,6 +1141,7 @@ def load_pipelines(model_type: str):
         f"vram_tier={vram_tier} | offline={OFFLINE_MODE}"
     )
     if device == "cuda":
+        warmup_cuda_context()
         logger.info(f"VRAM before load: {get_vram_info()}")
 
     try:
@@ -1142,7 +1182,7 @@ def _resolve_steps_and_guidance(
     if is_flux:
         # schnell is 4-step CFG-distilled — guidance must be 0
         return 4, 0.0
-    if "lightning" in loaded_id.lower():
+    if "lightning" in loaded_id.lower() or "juggernaut" in loaded_id.lower():
         # Keep Lightning's CFG setting, but honor the step count sent by the UI.
         return req_steps, 0.0
     if "tiny" in loaded_id.lower():
@@ -1267,7 +1307,7 @@ async def generate_image(req: GenerateRequest):
         t2i, i2i = load_pipelines(req.model_type)
 
         loaded_id = current_model_id or ""
-        is_xl = "lightning" in loaded_id.lower() or "flux" in loaded_id.lower()
+        is_xl = "lightning" in loaded_id.lower() or "juggernaut" in loaded_id.lower() or "flux" in loaded_id.lower()
 
         # Flux does not support img2img
         if is_flux and req.image:

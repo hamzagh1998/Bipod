@@ -164,8 +164,7 @@ for model_name in "${FAST_ASR_MODEL}" "${ACCURATE_ASR_MODEL}"; do
   asr_seen["${model_name}"]=1
   step="asr_model_$(step_key "${model_name}")"
   if step_done "${step}"; then
-    echo "[coach-preload] skipping ASR model (cached step): ${model_name}"
-    continue
+    echo "[coach-preload] verifying cached ASR model artifacts: ${model_name}"
   fi
   docker compose run --rm \
     -e HF_HUB_OFFLINE=0 \
@@ -173,18 +172,75 @@ for model_name in "${FAST_ASR_MODEL}" "${ACCURATE_ASR_MODEL}"; do
     -e COACH_WHISPER_MODEL_NAME="${model_name}" \
     bipod-app \
     python - <<'PY'
-from faster_whisper import WhisperModel
 import os
+import shutil
+from pathlib import Path
+
+from faster_whisper import WhisperModel
+from huggingface_hub import snapshot_download
 
 model_name = os.environ.get("COACH_WHISPER_MODEL_NAME", "medium").strip() or "medium"
+cache_dir = "/app/data/huggingface/hub"
+repo_id = f"Systran/faster-whisper-{model_name}"
+repo_cache_dir = Path(cache_dir) / f"models--{repo_id.replace('/', '--')}"
+
+required_files = {
+    "model.bin",
+    "config.json",
+    "tokenizer.json",
+}
+
+def snapshot_ready(path: str) -> bool:
+    base = Path(path)
+    if not base.exists() or not base.is_dir():
+        return False
+    for filename in required_files:
+        if not (base / filename).exists():
+            return False
+    if not ((base / "vocabulary.json").exists() or (base / "vocabulary.txt").exists()):
+        return False
+    return True
+
+allow_patterns = [
+    "model.bin",
+    "config.json",
+    "tokenizer.json",
+    "vocabulary*",
+]
+
+snapshot_path = ""
+try:
+    snapshot_path = snapshot_download(
+        repo_id=repo_id,
+        cache_dir=cache_dir,
+        local_files_only=True,
+        allow_patterns=allow_patterns,
+    )
+except Exception:
+    snapshot_path = ""
+
+if not snapshot_path or not snapshot_ready(snapshot_path):
+    print(f"[coach-preload] ASR cache incomplete for {model_name}; repairing snapshot...")
+    if repo_cache_dir.exists():
+        shutil.rmtree(repo_cache_dir, ignore_errors=True)
+    snapshot_path = snapshot_download(
+        repo_id=repo_id,
+        cache_dir=cache_dir,
+        local_files_only=False,
+        allow_patterns=allow_patterns,
+    )
+
+if not snapshot_ready(snapshot_path):
+    raise RuntimeError(f"ASR snapshot still incomplete for {model_name}: {snapshot_path}")
+
 WhisperModel(
     model_name,
     device="cpu",
     compute_type="int8",
-    download_root="/app/data/huggingface/hub",
-    local_files_only=False,
+    download_root=cache_dir,
+    local_files_only=True,
 )
-print(f"[coach-preload] faster-whisper model downloaded: {model_name}")
+print(f"[coach-preload] faster-whisper model ready: {model_name} at {snapshot_path}")
 PY
   mark_step_done "${step}"
 done

@@ -31,6 +31,7 @@ MODELS = [
     {"id": "stabilityai/sd-vae-ft-mse",                 "type": "vae"},
     {"id": "stabilityai/stable-diffusion-xl-base-1.0",  "type": "sdxl-base"},
     {"id": "ByteDance/SDXL-Lightning",                  "type": "sdxl-lightning-unet"},
+    {"id": "RunDiffusion/Juggernaut-XL-v9",             "type": "sdxl-base"},
     {"id": "madebyollin/sdxl-vae-fp16-fix",             "type": "vae"},
     {"id": "segmind/tiny-sd",                           "type": "sd"},
     {"id": "caidas/swin2SR-classical-sr-x2-64",         "type": "transformer"},
@@ -285,6 +286,7 @@ def preload():
     logger.info("  Realistic Vision V6     ~2.0 GB  (safetensors only)")
     logger.info("  sd-vae-ft-mse           ~0.3 GB")
     logger.info("  SDXL Base 1.0           ~6.5 GB  (safetensors only)")
+    logger.info("  Juggernaut XL v9        ~6.5 GB  (safetensors only)")
     logger.info("  SDXL Lightning UNet     ~0.2 GB  (4-step checkpoint)")
     logger.info("  sdxl-vae-fp16-fix       ~0.2 GB")
     logger.info("  Tiny-SD                 ~0.4 GB")
@@ -292,7 +294,7 @@ def preload():
     logger.info("  Real-ESRGAN x4plus      ~0.07 GB")
     logger.info("  Flux.1-schnell          ~34  GB  (bf16 safetensors only)")
     logger.info("  ─────────────────────────────────────────────────────")
-    logger.info("  Total                   ~43.8 GB")
+    logger.info("  Total                   ~50.3 GB")
     logger.info("")
     logger.info("NOTE: Strict cache verification is enabled.")
     logger.info("      Each repo is validated for required runtime files.")

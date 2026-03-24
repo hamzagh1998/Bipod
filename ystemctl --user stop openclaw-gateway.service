@@ -1,0 +1,22 @@
+○ openclaw-gateway.service - OpenClaw Gateway (v2026.3.13)
+     Loaded: loaded (]8;;file://nobara-pc/home/hamza/.config/systemd/user/openclaw-gateway.service\/home/hamza/.config/systemd/user/openclaw-gateway.service]8;;\; [0;1;32menabled[0m; preset: [0;1;38:5:185mdisabled[0m)
+    Drop-In: /usr/lib/systemd/user/service.d
+             └─]8;;file://nobara-pc/usr/lib/systemd/user/service.d/10-timeout-abort.conf\10-timeout-abort.conf]8;;\
+     Active: inactive (dead) since Sat 2026-03-21 13:35:46 CET; 6s ago
+   Duration: 11h 2min 29.279s
+ Invocation: 671846d29f2248319d5f1a55a813b8b7
+    Process: 182802 ExecStart=/home/hamza/.nvm/versions/node/v22.17.1/bin/node /home/hamza/.nvm/versions/node/v22.17.1/lib/node_modules/openclaw/dist/index.js gateway --port 18789 (code=exited, status=0/SUCCESS)
+   Main PID: 182802 (code=exited, status=0/SUCCESS)
+   Mem peak: 657.3M
+        CPU: 1min 15.429s
+
+Mar 21 13:34:51 nobara-pc node[182802]: 2026-03-21T13:34:51.228+01:00 [telegram] autoSelectFamily=true (default-node22)
+Mar 21 13:34:51 nobara-pc node[182802]: 2026-03-21T13:34:51.232+01:00 [telegram] dnsResultOrder=ipv4first (default-node22)
+Mar 21 13:35:19 nobara-pc node[182802]: 2026-03-21T13:35:19.400+01:00 [tools] tools.profile (coding) allowlist contains unknown entries (apply_patch, cron, image). These entries are shipped core tools but unavailable in the current runtime/provider/model/config.
+Mar 21 13:35:22 nobara-pc node[182802]: 2026-03-21T13:35:22.480+01:00 [telegram] getUpdates conflict: Call to 'getUpdates' failed! (409: Conflict: terminated by other getUpdates request; make sure that only one bot instance is running); retrying in 30s.
+Mar 21 13:35:46 nobara-pc systemd[3783]: Stopping openclaw-gateway.service - OpenClaw Gateway (v2026.3.13)...
+Mar 21 13:35:46 nobara-pc node[182802]: 2026-03-21T13:35:46.539+01:00 [gateway] signal SIGTERM received
+Mar 21 13:35:46 nobara-pc node[182802]: 2026-03-21T13:35:46.541+01:00 [gateway] received SIGTERM; shutting down
+Mar 21 13:35:46 nobara-pc node[182802]: 2026-03-21T13:35:46.567+01:00 [gmail-watcher] gmail watcher stopped
+Mar 21 13:35:46 nobara-pc systemd[3783]: Stopped openclaw-gateway.service - OpenClaw Gateway (v2026.3.13).
+Mar 21 13:35:46 nobara-pc systemd[3783]: [0;1;39m[0;1;31m[0;1;39mopenclaw-gateway.service: Consumed 1min 15.429s CPU time, 657.3M memory peak.[0m

@@ -571,20 +571,42 @@ def test_runtime_allocation_respects_manual_pin(monkeypatch):
 
 
 def test_get_runtime_status_aggregates_components(monkeypatch):
-    async def fake_get_tts_status(*, warm, preferred_model=None, preferred_tts_provider=None):
+    async def fake_get_tts_status(
+        *,
+        warm,
+        session_id=None,
+        user_id=None,
+        preferred_model=None,
+        preferred_tts_provider=None,
+        llm_device_preference="auto",
+        tts_device_preference="auto",
+    ):
         assert warm is True
+        assert session_id is None
+        assert user_id is None
         assert preferred_model is None
         assert preferred_tts_provider is None
+        assert llm_device_preference == "auto"
+        assert tts_device_preference == "auto"
         return {"engine": "cosyvoice", "ready": True, "state": "ready", "detail": "ok"}
 
     async def fake_asr_status(*, warm):
         assert warm is True
         return {"engine": "faster-whisper", "ready": True, "state": "ready", "detail": "ok"}
 
-    async def fake_ollama_status(*, warm, mode, preferred_model=None):
+    async def fake_ollama_status(
+        *,
+        warm,
+        mode,
+        preferred_model=None,
+        llm_device_preference="auto",
+        tts_device_preference="auto",
+    ):
         assert warm is True
         assert mode == "voice"
         assert preferred_model is None
+        assert llm_device_preference == "auto"
+        assert tts_device_preference == "auto"
         return {"engine": "ollama", "ready": True, "state": "ready", "detail": "ok"}
 
     async def fake_languagetool_status():
@@ -617,6 +639,54 @@ def test_get_runtime_status_aggregates_components(monkeypatch):
         assert payload["ready"] is True
         assert payload["components"]["languagetool"]["ready"] is False
         assert payload["runtime_profile"]["name"] == "gpu_constrained"
+
+    asyncio.run(scenario())
+
+
+def test_get_runtime_status_voice_autowarms_asr(monkeypatch):
+    async def fake_get_tts_status(
+        *,
+        warm,
+        session_id=None,
+        user_id=None,
+        preferred_model=None,
+        preferred_tts_provider=None,
+        llm_device_preference="auto",
+        tts_device_preference="auto",
+    ):
+        assert warm is False
+        return {"engine": "cosyvoice", "ready": True, "state": "ready", "detail": "ok"}
+
+    async def fake_asr_status(*, warm, auto_warm=False):
+        assert warm is False
+        assert auto_warm is True
+        return {"engine": "faster-whisper", "ready": True, "state": "ready", "detail": "ok"}
+
+    async def fake_ollama_status(
+        *,
+        warm,
+        mode,
+        preferred_model=None,
+        llm_device_preference="auto",
+        tts_device_preference="auto",
+    ):
+        assert warm is False
+        assert mode == "voice"
+        return {"engine": "ollama", "ready": True, "state": "ready", "detail": "ok"}
+
+    async def fake_languagetool_status():
+        return {"engine": "languagetool", "enabled": True, "ready": False, "state": "error", "detail": "offline"}
+
+    monkeypatch.setattr(coach_service, "get_tts_status", fake_get_tts_status)
+    monkeypatch.setattr(coach_service, "_asr_status", fake_asr_status)
+    monkeypatch.setattr(coach_service, "_ollama_status", fake_ollama_status)
+    monkeypatch.setattr(coach_service, "_languagetool_status", fake_languagetool_status)
+
+    async def scenario():
+        payload = await coach_service.get_runtime_status(warm=False, mode="voice")
+        assert payload["ok"] is True
+        assert payload["mode"] == "voice"
+        assert payload["ready"] is True
 
     asyncio.run(scenario())
 
@@ -1065,6 +1135,18 @@ def test_append_native_translation_parses_mapping_string():
     assert "{'en':" not in rendered
 
 
+def test_append_native_translation_parses_mapping_with_prefix_label():
+    rendered = coach_service._append_native_translation(
+        message="Parfait, on continue.",
+        translation="[English] {'en': 'Great, let us continue.', 'fr': 'Parfait, on continue.'}",
+        target_language="French",
+        native_language="English",
+    )
+    assert "[English]" in rendered
+    assert "Great, let us continue." in rendered
+    assert "{'en':" not in rendered
+
+
 def test_append_native_translation_parses_mapping_object():
     rendered = coach_service._append_native_translation(
         message="Parfait, on continue.",
@@ -1111,3 +1193,11 @@ def test_apply_direct_question_guard_answers_name():
         persona_style="Impersonate Anby Demara for this full session.",
     )
     assert guarded.startswith("Je m'appelle Anby.")
+
+
+def test_sanitize_coach_tone_rewrites_accusatory_phrase():
+    rewritten = coach_service._sanitize_coach_tone(
+        "You're avoiding the question. What specific activity do you enjoy?"
+    )
+    assert "avoiding the question" not in rewritten.lower()
+    assert rewritten.startswith("Thanks. Let's make your answer more specific.")

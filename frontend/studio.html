@@ -116,6 +116,9 @@
                     <option value="sdxl-lightning">
                       SDXL Lightning (Fast)
                     </option>
+                    <option value="juggernaut-xl">
+                      Juggernaut XL v9 (Quality)
+                    </option>
                     <option value="flux-schnell">
                       Flux.1 Schnell (Photoreal)
                     </option>
@@ -154,7 +157,11 @@
                 <div class="control-group">
                   <label class="control-label-row">
                     <span>Prompt</span>
-                    <button type="button" id="studio-improve-prompt-btn" class="mini-action-btn">
+                    <button
+                      type="button"
+                      id="studio-improve-prompt-btn"
+                      class="mini-action-btn"
+                    >
                       AI Improve
                     </button>
                   </label>
@@ -168,7 +175,11 @@
                 <div class="control-group">
                   <label class="control-label-row">
                     <span>Negative Prompt</span>
-                    <button type="button" id="studio-improve-negative-btn" class="mini-action-btn">
+                    <button
+                      type="button"
+                      id="studio-improve-negative-btn"
+                      class="mini-action-btn"
+                    >
                       AI Improve
                     </button>
                   </label>
@@ -229,9 +240,7 @@
                     >Resolution Target:
                     <span id="studio-resolution-val">1024</span></label
                   >
-                  <select
-                    id="studio-resolution"
-                  >
+                  <select id="studio-resolution">
                     <option value="512">512</option>
                     <option value="640">640</option>
                     <option value="768">768</option>
@@ -248,14 +257,17 @@
                     <option value="4096">4096</option>
                   </select>
                   <div class="res-readout" id="studio-resolution-hint">
-                    Generate at a safe native size, then use 2x/4x/8x upscale for larger exports.
+                    Generate at a safe native size, then use 2x/4x/8x upscale
+                    for larger exports.
                   </div>
                 </div>
 
                 <div class="control-group">
                   <label>Upscale Engine</label>
                   <select id="studio-upscaler">
-                    <option value="realesrgan" selected>Real-ESRGAN (recommended)</option>
+                    <option value="realesrgan" selected>
+                      Real-ESRGAN (recommended)
+                    </option>
                     <option value="swin2sr">Swin2SR</option>
                   </select>
                 </div>
@@ -268,7 +280,8 @@
                     <option value="webp">WebP</option>
                   </select>
                   <div class="res-readout">
-                    JPEG is smaller and faster. PNG keeps lossless detail. WebP is a middle ground.
+                    JPEG is smaller and faster. PNG keeps lossless detail. WebP
+                    is a middle ground.
                   </div>
                 </div>
 
@@ -285,7 +298,8 @@
                     />
                   </div>
                   <div class="res-readout">
-                    The uploaded image appears in the preview. Use 2x, 4x, or 8x without generating first.
+                    The uploaded image appears in the preview. Use 2x, 4x, or 8x
+                    without generating first.
                   </div>
                 </div>
 

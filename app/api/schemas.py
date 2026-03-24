@@ -117,6 +117,14 @@ class CoachSessionCreate(BaseModel):
     focus_area: Optional[str] = None
     model_id: Optional[str] = None
     voice_profile_id: Optional[str] = None
+    llm_device_preference: Literal["auto", "cpu", "cuda"] = "auto"
+    tts_device_preference: Literal["auto", "cpu", "cuda"] = "auto"
+
+
+class CoachSessionSettingsUpdate(BaseModel):
+    model_id: Optional[str] = Field(default=None, max_length=120)
+    llm_device_preference: Literal["auto", "cpu", "cuda"] = "auto"
+    tts_device_preference: Literal["auto", "cpu", "cuda"] = "auto"
 
 
 class CoachSessionResponse(BaseModel):
@@ -130,6 +138,8 @@ class CoachSessionResponse(BaseModel):
     focus_area: Optional[str] = None
     model_id: Optional[str] = None
     voice_profile_id: Optional[str] = None
+    llm_device_preference: Literal["auto", "cpu", "cuda"] = "auto"
+    tts_device_preference: Literal["auto", "cpu", "cuda"] = "auto"
     status: str
     created_at: datetime
     updated_at: datetime
@@ -213,6 +223,9 @@ class CoachTtsRequest(BaseModel):
     voice_profile_id: Optional[str] = Field(default=None, max_length=120)
     reference_clip_id: Optional[str] = Field(default=None, max_length=120)
     builtin_voice_id: Optional[str] = Field(default=None, max_length=60)
+    session_id: Optional[str] = Field(default=None, max_length=120)
+    llm_device_preference: Optional[Literal["auto", "cpu", "cuda"]] = "auto"
+    tts_device_preference: Optional[Literal["auto", "cpu", "cuda"]] = "auto"
 
 
 class CoachTextTurnRequest(BaseModel):
@@ -220,6 +233,7 @@ class CoachTextTurnRequest(BaseModel):
     text: str = Field(min_length=1, max_length=4000)
     preferred_model: Optional[str] = Field(default=None, min_length=1, max_length=120)
     persona_style: Optional[str] = Field(default=None, max_length=2000)
+    llm_device_preference: Optional[Literal["auto", "cpu", "cuda"]] = "auto"
 
 
 class CoachRuntimePreloadRequest(BaseModel):

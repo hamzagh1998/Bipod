@@ -163,7 +163,13 @@ function getResolutionInputValues() {
 function chooseClosestResolutionOption(targetEdge) {
   const values = getResolutionInputValues();
   if (!values.length) return targetEdge || 1024;
-  if (!targetEdge) return values[Math.min(values.length - 1, values.indexOf(1024) >= 0 ? values.indexOf(1024) : 0)];
+  if (!targetEdge)
+    return values[
+      Math.min(
+        values.length - 1,
+        values.indexOf(1024) >= 0 ? values.indexOf(1024) : 0,
+      )
+    ];
 
   const atOrBelow = values.filter((value) => value <= targetEdge);
   if (atOrBelow.length) {
@@ -214,15 +220,15 @@ function syncResolutionGuidance(model) {
   const vramUsage = model?.vram_usage || model?.req || "Varies by hardware";
 
   if (!recommendedEdge && !maxEdge) {
-    studioDom.resolutionHint.innerText =
-      `Generate at a safe native size, then use 2x/4x/8x upscale for larger exports. Expected VRAM: ${vramUsage}.`;
+    studioDom.resolutionHint.innerText = `Generate at a safe native size, then use 2x/4x/8x upscale for larger exports. Expected VRAM: ${vramUsage}.`;
     return;
   }
 
-  const recommendedLabel = recommendedEdge ? `${recommendedEdge}px` : "the recommended size";
+  const recommendedLabel = recommendedEdge
+    ? `${recommendedEdge}px`
+    : "the recommended size";
   const maxLabel = maxEdge ? `${maxEdge}px` : recommendedLabel;
-  studioDom.resolutionHint.innerText =
-    `Default native target ${recommendedLabel}; max native ${maxLabel}; expected VRAM ${vramUsage}. Use upscale for larger exports.`;
+  studioDom.resolutionHint.innerText = `Default native target ${recommendedLabel}; max native ${maxLabel}; expected VRAM ${vramUsage}. Use upscale for larger exports.`;
 }
 
 function syncModelDefaults(model) {
@@ -259,7 +265,11 @@ function clearPreview() {
   syncPreviewActionAvailability();
 }
 
-function mapSavedImageToGalleryItem(savedImage, base64Data = null, meta = null) {
+function mapSavedImageToGalleryItem(
+  savedImage,
+  base64Data = null,
+  meta = null,
+) {
   return {
     type: "image",
     id: savedImage.id,
@@ -286,7 +296,9 @@ async function fetchStudioProjects() {
   renderProjects();
 
   const preferredId = studioState.currentProjectId;
-  const hasPreferred = preferredId && studioState.projects.some((project) => project.id === preferredId);
+  const hasPreferred =
+    preferredId &&
+    studioState.projects.some((project) => project.id === preferredId);
   if (hasPreferred) {
     await selectStudioProject(preferredId, { persist: false });
     return;
@@ -368,7 +380,9 @@ async function fetchProjectImages(projectId) {
   }
 
   const images = await resp.json();
-  studioState.gallery = images.map((image) => mapSavedImageToGalleryItem(image));
+  studioState.gallery = images.map((image) =>
+    mapSavedImageToGalleryItem(image),
+  );
   renderGallery();
 
   if (studioState.gallery.length) {
@@ -394,7 +408,9 @@ async function deleteStudioProject(projectId) {
     return;
   }
 
-  studioState.projects = studioState.projects.filter((entry) => entry.id !== projectId);
+  studioState.projects = studioState.projects.filter(
+    (entry) => entry.id !== projectId,
+  );
   if (studioState.currentProjectId === projectId) {
     studioState.currentProjectId = null;
     localStorage.removeItem("bipod_studio_project");
@@ -429,7 +445,8 @@ async function ensureCurrentPreviewBase64() {
       studioState.lastResult = base64Payload;
       resolve(base64Payload);
     };
-    reader.onerror = () => reject(reader.error || new Error("Failed to read image data."));
+    reader.onerror = () =>
+      reject(reader.error || new Error("Failed to read image data."));
     reader.readAsDataURL(blob);
   });
 }
@@ -453,9 +470,13 @@ async function deleteCurrentPreviewImage() {
     return;
   }
 
-  studioState.gallery = studioState.gallery.filter((entry) => entry.id !== item.id);
+  studioState.gallery = studioState.gallery.filter(
+    (entry) => entry.id !== item.id,
+  );
   renderGallery();
-  const project = studioState.projects.find((entry) => entry.id === studioState.currentProjectId);
+  const project = studioState.projects.find(
+    (entry) => entry.id === studioState.currentProjectId,
+  );
   if (project) {
     project.image_count = Math.max(0, (project.image_count || 1) - 1);
     if (project.cover_image_url === item.url) {
@@ -471,7 +492,11 @@ async function deleteCurrentPreviewImage() {
   }
 }
 
-function setPromptImproveButtonState(button, isLoading, defaultLabel = "AI Improve") {
+function setPromptImproveButtonState(
+  button,
+  isLoading,
+  defaultLabel = "AI Improve",
+) {
   if (!button) return;
   button.disabled = isLoading;
   button.innerText = isLoading ? "Improving..." : defaultLabel;
@@ -754,7 +779,9 @@ function setupEventListeners() {
       btn.addEventListener("click", async () => {
         let factor = parseInt(btn.dataset.upscaleFactor, 10) || 2;
         if (factor === 8 && !canUseEightXUpscale()) {
-          alert("8x upscale is only available with Real-ESRGAN. Switch the Upscale Engine to Real-ESRGAN to use 8x.");
+          alert(
+            "8x upscale is only available with Real-ESRGAN. Switch the Upscale Engine to Real-ESRGAN to use 8x.",
+          );
           return;
         }
         studioState.upscaleFactor = factor;
@@ -771,7 +798,10 @@ function setupEventListeners() {
     );
   }
   if (studioDom.deleteImageBtn) {
-    studioDom.deleteImageBtn.addEventListener("click", deleteCurrentPreviewImage);
+    studioDom.deleteImageBtn.addEventListener(
+      "click",
+      deleteCurrentPreviewImage,
+    );
   }
   if (studioDom.lightboxDownload) {
     studioDom.lightboxDownload.addEventListener("click", () =>
@@ -816,14 +846,20 @@ function setupEventListeners() {
       if (!isTouchPreviewMode() || e.target !== studioDom.mainPreview) return;
       const hasImage = studioDom.resultImg?.style.display !== "none";
       const hasVideo = studioDom.resultVideo?.style.display !== "none";
-      if ((hasImage || hasVideo) && !studioDom.mainPreview.classList.contains("controls-visible")) {
+      if (
+        (hasImage || hasVideo) &&
+        !studioDom.mainPreview.classList.contains("controls-visible")
+      ) {
         revealPreviewActions();
       }
     });
   }
   if (studioDom.resultImg) {
     studioDom.resultImg.addEventListener("click", () => {
-      if (isTouchPreviewMode() && !studioDom.mainPreview?.classList.contains("controls-visible")) {
+      if (
+        isTouchPreviewMode() &&
+        !studioDom.mainPreview?.classList.contains("controls-visible")
+      ) {
         revealPreviewActions();
         return;
       }
@@ -898,7 +934,9 @@ function applyResolutionSelection() {
   const maxDim = 4096;
   const largest = Math.max(width, height);
   let clampEdge = maxDim;
-  const modelMaxEdge = resolutionEdge(getSelectedImagineModel()?.max_resolution);
+  const modelMaxEdge = resolutionEdge(
+    getSelectedImagineModel()?.max_resolution,
+  );
   if (modelMaxEdge) {
     clampEdge = Math.min(clampEdge, modelMaxEdge);
   }
@@ -948,7 +986,9 @@ async function fetchHardwareStats() {
         studioDom.resolutionInput.value = String(studioState.resolutionTarget);
       }
       if (studioDom.resolutionVal) {
-        studioDom.resolutionVal.innerText = String(studioState.resolutionTarget);
+        studioDom.resolutionVal.innerText = String(
+          studioState.resolutionTarget,
+        );
       }
       applyResolutionSelection();
 
@@ -1092,6 +1132,7 @@ function updateEstimates() {
 
   if (studioState.model === "sdxl-turbo") estPerImage *= 0.8;
   if (studioState.model === "sdxl-lightning") estPerImage *= 1.2;
+  if (studioState.model === "juggernaut-xl") estPerImage *= 1.4;
   if (studioState.model === "flux-schnell") estPerImage *= 4.5; // Flux is significantly heavier
 
   const totalEst = estPerImage * studioState.batchSize + overhead;
@@ -1121,8 +1162,9 @@ function handleStandaloneUpscaleFileSelect(file) {
     studioState.upscaleSourceImage = rawBase64;
     studioState.lastResult = rawBase64;
     studioState.lastResultMime = file.type || "image/png";
-    studioState.lastResultExtension =
-      file.name?.includes(".") ? file.name.split(".").pop().toLowerCase() : "png";
+    studioState.lastResultExtension = file.name?.includes(".")
+      ? file.name.split(".").pop().toLowerCase()
+      : "png";
     updatePreview({
       type: "image",
       data: rawBase64,
@@ -1247,9 +1289,15 @@ async function handleUpscale() {
     studioState.upscaleFactor = data.scale || scale;
     syncUpscaleControls();
     if (data.saved_image) {
-      const item = mapSavedImageToGalleryItem(data.saved_image, data.image_base64, data);
+      const item = mapSavedImageToGalleryItem(
+        data.saved_image,
+        data.image_base64,
+        data,
+      );
       studioState.gallery.unshift(item);
-      const project = studioState.projects.find((entry) => entry.id === studioState.currentProjectId);
+      const project = studioState.projects.find(
+        (entry) => entry.id === studioState.currentProjectId,
+      );
       if (project) {
         project.image_count = (project.image_count || 0) + 1;
         project.cover_image_url = data.saved_image.url;
@@ -1261,7 +1309,9 @@ async function handleUpscale() {
       studioDom.resultImg.src = `data:${studioState.lastResultMime};base64,${data.image_base64}`;
     }
     if (data.was_capped) {
-      alert("8x upscale is only available with Real-ESRGAN. The request was reduced to 4x.");
+      alert(
+        "8x upscale is only available with Real-ESRGAN. The request was reduced to 4x.",
+      );
     }
   } catch (e) {
     alert(e.message);
@@ -1276,10 +1326,13 @@ function displayBatchResults(results) {
   results.forEach((res) => {
     studioState.gallery.unshift(res);
   });
-  const project = studioState.projects.find((entry) => entry.id === studioState.currentProjectId);
+  const project = studioState.projects.find(
+    (entry) => entry.id === studioState.currentProjectId,
+  );
   if (project) {
     project.image_count = (project.image_count || 0) + results.length;
-    project.cover_image_url = studioState.gallery[0]?.url || project.cover_image_url || null;
+    project.cover_image_url =
+      studioState.gallery[0]?.url || project.cover_image_url || null;
   }
   renderProjects();
 
@@ -1309,14 +1362,19 @@ function updatePreview(item) {
       studioDom.resultVideo.style.display = "block";
     }
     // Highscaling/Upscaling doesn't apply to video in this UI yet
-    if (studioDom.upscaleControls) studioDom.upscaleControls.style.display = "none";
+    if (studioDom.upscaleControls)
+      studioDom.upscaleControls.style.display = "none";
   } else {
     const rawData = typeof item === "string" ? item : item.data;
     const meta = typeof item === "string" ? null : item.meta;
     const mime =
-      (typeof item === "object" && item?.mime) || studioState.lastResultMime || "image/jpeg";
+      (typeof item === "object" && item?.mime) ||
+      studioState.lastResultMime ||
+      "image/jpeg";
     const extension =
-      (typeof item === "object" && item?.extension) || studioState.lastResultExtension || "jpg";
+      (typeof item === "object" && item?.extension) ||
+      studioState.lastResultExtension ||
+      "jpg";
     const src =
       (typeof item === "object" && item?.url) ||
       (rawData ? `data:${mime};base64,${rawData}` : "");
@@ -1389,7 +1447,11 @@ function selectGalleryItem(idx) {
     return;
   }
   studioState.lastResult =
-    item && item.type === "video" ? null : typeof item === "string" ? item : item.data;
+    item && item.type === "video"
+      ? null
+      : typeof item === "string"
+        ? item
+        : item.data;
   studioState.lastResultMime =
     item && item.type === "video" ? null : item?.mime || "image/jpeg";
   studioState.lastResultExtension =
@@ -1417,7 +1479,8 @@ function setLoading(isLoading, text = "Generating...") {
 function downloadImage(src, name = null) {
   const link = document.createElement("a");
   link.href = src;
-  link.download = name || `bipod-imagine.${studioState.lastResultExtension || "jpg"}`;
+  link.download =
+    name || `bipod-imagine.${studioState.lastResultExtension || "jpg"}`;
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);

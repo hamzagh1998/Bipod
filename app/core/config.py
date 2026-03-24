@@ -246,6 +246,7 @@ class Settings(BaseSettings):
     # Imagine tiers
     IMAGINE_FLUX_MODEL: str = "flux-schnell"     # Photoreal Quality
     IMAGINE_SDXL_MODEL: str = "sdxl-lightning"   # High Quality (Fast)
+    IMAGINE_JUGGERNAUT_MODEL: str = "juggernaut-xl"  # High Quality (SDXL fine-tune)
     IMAGINE_SD_MODEL: str = "stable-diffusion"   # Medium Quality (SD 1.5)
     IMAGINE_TINY_MODEL: str = "dalle-mini"       # Low Quality / CPU
 

@@ -48,6 +48,8 @@ def test_coach_session_endpoints_delegate_to_service(monkeypatch):
         audio_retention_opt_in=False,
         focus_area="conversation",
         model_id="qwen3:8b",
+        llm_device_preference="auto",
+        tts_device_preference="auto",
         voice_profile_id=None,
         status="active",
         created_at=now,
@@ -73,6 +75,8 @@ def test_coach_session_endpoints_delegate_to_service(monkeypatch):
                 "audio_retention_opt_in": False,
                 "focus_area": "conversation",
                 "model_id": "qwen3:8b",
+                "llm_device_preference": "auto",
+                "tts_device_preference": "auto",
                 "voice_profile_id": None,
                 "status": "active",
                 "created_at": now,
@@ -183,6 +187,74 @@ def test_coach_progress_and_lists(monkeypatch):
     assert progress["average_score"] == 91.0
 
 
+def test_coach_update_session_settings_endpoint(monkeypatch):
+    session_id = str(uuid4())
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    fake_session = SimpleNamespace(
+        id=session_id,
+        user_id=42,
+        title="Focus Session",
+        target_language="English",
+        native_language="Arabic",
+        cefr_level="B1",
+        audio_retention_opt_in=False,
+        focus_area="conversation",
+        model_id="qwen3:8b",
+        llm_device_preference="cpu",
+        tts_device_preference="cuda",
+        voice_profile_id=None,
+        status="active",
+        created_at=now,
+        updated_at=now,
+        turns=[],
+    )
+    captured = {}
+
+    async def fake_update_session_settings(
+        *,
+        session_id,
+        user_id,
+        model_id,
+        llm_device_preference,
+        tts_device_preference,
+    ):
+        captured["session_id"] = session_id
+        captured["user_id"] = user_id
+        captured["model_id"] = model_id
+        captured["llm_device_preference"] = llm_device_preference
+        captured["tts_device_preference"] = tts_device_preference
+        return fake_session
+
+    monkeypatch.setattr(
+        coach_module.coach_service,
+        "update_session_settings",
+        fake_update_session_settings,
+    )
+
+    payload = asyncio.run(
+        coach_module.update_session_settings(
+            session_id=session_id,  # type: ignore[arg-type]
+            payload=coach_module.CoachSessionSettingsUpdate(
+                model_id="qwen3:8b",
+                llm_device_preference="cpu",
+                tts_device_preference="cuda",
+            ),
+            user_id=42,
+        )
+    )
+
+    assert captured == {
+        "session_id": session_id,
+        "user_id": 42,
+        "model_id": "qwen3:8b",
+        "llm_device_preference": "cpu",
+        "tts_device_preference": "cuda",
+    }
+    assert payload["id"] == session_id
+    assert payload["llm_device_preference"] == "cpu"
+    assert payload["tts_device_preference"] == "cuda"
+
+
 def test_coach_stream_turn_emits_ndjson_events(monkeypatch):
     session_id = str(uuid4())
     expected_session_id = session_id
@@ -201,6 +273,7 @@ def test_coach_stream_turn_emits_ndjson_events(monkeypatch):
         transcript_hint=None,
         preferred_model=None,
         preferred_asr_model=None,
+        llm_device_preference=None,
         persona_style=None,
     ):
         assert user_id == 7
@@ -208,6 +281,7 @@ def test_coach_stream_turn_emits_ndjson_events(monkeypatch):
         assert transcript_hint == "coach me"
         assert preferred_model == "small-model"
         assert preferred_asr_model == "accurate"
+        assert llm_device_preference == "cpu"
         assert persona_style == "calm tactical persona"
         seen_audio_reads.append(await audio.read())
         await audio.seek(0)
@@ -228,6 +302,7 @@ def test_coach_stream_turn_emits_ndjson_events(monkeypatch):
                 transcript_hint="coach me",
                 preferred_model="small-model",
                 preferred_asr_model="accurate",
+                llm_device_preference="cpu",
                 persona_style="calm tactical persona",
                 user_id=7,
             )
@@ -330,6 +405,9 @@ def test_coach_tts_endpoint_returns_audio(monkeypatch):
         voice_profile_id=None,
         reference_clip_id=None,
         builtin_voice_id=None,
+        session_id=None,
+        llm_device_preference="auto",
+        tts_device_preference="auto",
         user_id=None,
     ):
         captured["text"] = text
@@ -342,6 +420,9 @@ def test_coach_tts_endpoint_returns_audio(monkeypatch):
         captured["voice_profile_id"] = voice_profile_id
         captured["reference_clip_id"] = reference_clip_id
         captured["builtin_voice_id"] = builtin_voice_id
+        captured["session_id"] = session_id
+        captured["llm_device_preference"] = llm_device_preference
+        captured["tts_device_preference"] = tts_device_preference
         captured["user_id"] = user_id
         return b"RIFF....WAVE", "audio/wav"
 
@@ -373,6 +454,9 @@ def test_coach_tts_endpoint_returns_audio(monkeypatch):
         "voice_profile_id": None,
         "reference_clip_id": None,
         "builtin_voice_id": None,
+        "session_id": None,
+        "llm_device_preference": "auto",
+        "tts_device_preference": "auto",
         "user_id": 3,
     }
     assert response.media_type == "audio/wav"
@@ -382,10 +466,23 @@ def test_coach_tts_endpoint_returns_audio(monkeypatch):
 def test_coach_tts_status_endpoint(monkeypatch):
     captured = {}
 
-    async def fake_get_tts_status(*, warm, preferred_model=None, preferred_tts_provider=None):
+    async def fake_get_tts_status(
+        *,
+        warm,
+        session_id=None,
+        user_id=None,
+        preferred_model=None,
+        preferred_tts_provider=None,
+        llm_device_preference=None,
+        tts_device_preference=None,
+    ):
         captured["warm"] = warm
+        captured["session_id"] = session_id
+        captured["user_id"] = user_id
         captured["preferred_model"] = preferred_model
         captured["preferred_tts_provider"] = preferred_tts_provider
+        captured["llm_device_preference"] = llm_device_preference
+        captured["tts_device_preference"] = tts_device_preference
         return {
             "ok": True,
             "engine": "cosyvoice",
@@ -404,16 +501,23 @@ def test_coach_tts_status_endpoint(monkeypatch):
     payload = asyncio.run(
         coach_module.tts_status(
             warm=True,
+            session_id="session-1",
             preferred_model="qwen3:8b",
             preferred_tts_provider="openvoice",
+            llm_device_preference="cpu",
+            tts_device_preference="cuda",
             user_id=3,
         )
     )
 
     assert captured == {
         "warm": True,
+        "session_id": "session-1",
+        "user_id": 3,
         "preferred_model": "qwen3:8b",
         "preferred_tts_provider": "openvoice",
+        "llm_device_preference": "cpu",
+        "tts_device_preference": "cuda",
     }
     assert payload["engine"] == "cosyvoice"
     assert payload["ready"] is False
@@ -423,12 +527,26 @@ def test_coach_tts_status_endpoint(monkeypatch):
 def test_coach_runtime_endpoints(monkeypatch):
     captured = {}
 
-    async def fake_get_runtime_status(*, warm, mode, preferred_model=None, preferred_tts_provider=None):
+    async def fake_get_runtime_status(
+        *,
+        warm,
+        mode,
+        session_id=None,
+        user_id=None,
+        preferred_model=None,
+        preferred_tts_provider=None,
+        llm_device_preference=None,
+        tts_device_preference=None,
+    ):
         captured["status"] = {
             "warm": warm,
             "mode": mode,
+            "session_id": session_id,
+            "user_id": user_id,
             "preferred_model": preferred_model,
             "preferred_tts_provider": preferred_tts_provider,
+            "llm_device_preference": llm_device_preference,
+            "tts_device_preference": tts_device_preference,
         }
         return {"ok": True, "ready": False, "mode": mode or "voice", "state": "warming", "components": {}}
 
@@ -443,8 +561,11 @@ def test_coach_runtime_endpoints(monkeypatch):
         coach_module.runtime_status(
             warm=True,
             mode="text",
+            session_id="session-2",
             preferred_model="llama3.2:3b",
             preferred_tts_provider="openvoice",
+            llm_device_preference="cpu",
+            tts_device_preference="cuda",
             user_id=3,
         )
     )
@@ -458,8 +579,12 @@ def test_coach_runtime_endpoints(monkeypatch):
     assert captured["status"] == {
         "warm": True,
         "mode": "text",
+        "session_id": "session-2",
+        "user_id": 3,
         "preferred_model": "llama3.2:3b",
         "preferred_tts_provider": "openvoice",
+        "llm_device_preference": "cpu",
+        "tts_device_preference": "cuda",
     }
     assert captured["preload"] == {"mode": "voice"}
     assert status_payload["state"] == "warming"
@@ -475,13 +600,22 @@ def test_coach_text_turn_endpoint(monkeypatch):
         assert user_id == 7
         return SimpleNamespace(id=session_id)
 
-    async def fake_process_text_turn(*, user_id, session_id, text, preferred_model, persona_style):
+    async def fake_process_text_turn(
+        *,
+        user_id,
+        session_id,
+        text,
+        preferred_model,
+        llm_device_preference,
+        persona_style,
+    ):
         captured.update(
             {
                 "user_id": user_id,
                 "session_id": session_id,
                 "text": text,
                 "preferred_model": preferred_model,
+                "llm_device_preference": llm_device_preference,
                 "persona_style": persona_style,
             }
         )
@@ -496,6 +630,7 @@ def test_coach_text_turn_endpoint(monkeypatch):
                 session_id=session_id,
                 text="I usually wake up at six and review my tasks.",
                 preferred_model="qwen3:8b",
+                llm_device_preference="cpu",
                 persona_style="calm tactical persona",
             ),
             user_id=7,
@@ -503,6 +638,7 @@ def test_coach_text_turn_endpoint(monkeypatch):
     )
     assert payload["score"] == 82
     assert captured["preferred_model"] == "qwen3:8b"
+    assert captured["llm_device_preference"] == "cpu"
 
 
 def test_coach_supported_languages_endpoint(monkeypatch):

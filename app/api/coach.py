@@ -13,6 +13,7 @@ from app.api.schemas import (
     CoachBuiltinVoiceResponse,
     CoachRuntimePreloadRequest,
     CoachSessionCreate,
+    CoachSessionSettingsUpdate,
     CoachTextTurnRequest,
     CoachTtsRequest,
     CoachVoiceProfileCreate,
@@ -82,6 +83,8 @@ def _serialize_session(session) -> dict:
         "audio_retention_opt_in": session.audio_retention_opt_in,
         "focus_area": session.focus_area,
         "model_id": session.model_id,
+        "llm_device_preference": getattr(session, "llm_device_preference", "auto"),
+        "tts_device_preference": getattr(session, "tts_device_preference", "auto"),
         "voice_profile_id": session.voice_profile_id,
         "status": session.status,
         "created_at": session.created_at,
@@ -107,6 +110,8 @@ async def create_session(
             focus_area=payload.focus_area,
             model_id=payload.model_id,
             voice_profile_id=payload.voice_profile_id,
+            llm_device_preference=payload.llm_device_preference,
+            tts_device_preference=payload.tts_device_preference,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -142,6 +147,24 @@ async def delete_session(
     if not deleted:
         raise _session_not_found(str(session_id))
     return {"deleted": True, "session_id": str(session_id)}
+
+
+@router.patch("/sessions/{session_id}/settings")
+async def update_session_settings(
+    session_id: UUID,
+    payload: CoachSessionSettingsUpdate,
+    user_id: int = Depends(auth_service.get_current_user),
+):
+    updated = await coach_service.update_session_settings(
+        session_id=str(session_id),
+        user_id=user_id,
+        model_id=payload.model_id,
+        llm_device_preference=payload.llm_device_preference,
+        tts_device_preference=payload.tts_device_preference,
+    )
+    if not updated:
+        raise _session_not_found(str(session_id))
+    return _serialize_session(updated)
 
 
 @router.get("/sessions/{session_id}/turns")
@@ -242,6 +265,7 @@ async def _stream_turn_impl(
     transcript_hint: Optional[str],
     preferred_model: Optional[str],
     preferred_asr_model: Optional[str],
+    llm_device_preference: Optional[str],
     persona_style: Optional[str],
     user_id: int,
 ) -> StreamingResponse:
@@ -270,6 +294,7 @@ async def _stream_turn_impl(
                     transcript_hint=transcript_hint,
                     preferred_model=preferred_model,
                     preferred_asr_model=preferred_asr_model,
+                    llm_device_preference=llm_device_preference,
                     persona_style=persona_style,
                 ):
                     normalized = _validate_stream_event(event)
@@ -307,6 +332,7 @@ async def stream_turn_by_path(
     transcript_hint: Optional[str] = Form(default=None, max_length=4000),
     preferred_model: Optional[str] = Form(default=None, min_length=1, max_length=120),
     preferred_asr_model: Optional[str] = Form(default=None, max_length=40),
+    llm_device_preference: Optional[str] = Form(default="auto", max_length=8),
     persona_style: Optional[str] = Form(default=None, max_length=2000),
     user_id: int = Depends(auth_service.get_current_user),
 ):
@@ -316,6 +342,7 @@ async def stream_turn_by_path(
         transcript_hint=transcript_hint,
         preferred_model=preferred_model,
         preferred_asr_model=preferred_asr_model,
+        llm_device_preference=llm_device_preference,
         persona_style=persona_style,
         user_id=user_id,
     )
@@ -328,6 +355,7 @@ async def stream_turn(
     transcript_hint: Optional[str] = Form(default=None, max_length=4000),
     preferred_model: Optional[str] = Form(default=None, min_length=1, max_length=120),
     preferred_asr_model: Optional[str] = Form(default=None, max_length=40),
+    llm_device_preference: Optional[str] = Form(default="auto", max_length=8),
     persona_style: Optional[str] = Form(default=None, max_length=2000),
     user_id: int = Depends(auth_service.get_current_user),
 ):
@@ -337,6 +365,7 @@ async def stream_turn(
         transcript_hint=transcript_hint,
         preferred_model=preferred_model,
         preferred_asr_model=preferred_asr_model,
+        llm_device_preference=llm_device_preference,
         persona_style=persona_style,
         user_id=user_id,
     )
@@ -358,6 +387,7 @@ async def text_turn(
                 session_id=str(payload.session_id),
                 text=payload.text,
                 preferred_model=payload.preferred_model,
+                llm_device_preference=payload.llm_device_preference,
                 persona_style=payload.persona_style,
             )
     except ValueError as exc:
@@ -381,6 +411,9 @@ async def synthesize_tts(
             voice_profile_id=payload.voice_profile_id,
             reference_clip_id=payload.reference_clip_id,
             builtin_voice_id=payload.builtin_voice_id,
+            session_id=payload.session_id,
+            llm_device_preference=payload.llm_device_preference,
+            tts_device_preference=payload.tts_device_preference,
             user_id=user_id,
         )
     except ValueError as exc:
@@ -401,15 +434,21 @@ async def synthesize_tts(
 @router.get("/tts/status")
 async def tts_status(
     warm: bool = False,
+    session_id: Optional[str] = None,
     preferred_model: Optional[str] = None,
     preferred_tts_provider: Optional[str] = None,
+    llm_device_preference: Optional[str] = "auto",
+    tts_device_preference: Optional[str] = "auto",
     user_id: int = Depends(auth_service.get_current_user),
 ):
-    _ = user_id
     return await coach_service.get_tts_status(
         warm=warm,
+        session_id=session_id,
+        user_id=user_id,
         preferred_model=preferred_model,
         preferred_tts_provider=preferred_tts_provider,
+        llm_device_preference=llm_device_preference,
+        tts_device_preference=tts_device_preference,
     )
 
 
@@ -417,16 +456,22 @@ async def tts_status(
 async def runtime_status(
     warm: bool = False,
     mode: Optional[str] = None,
+    session_id: Optional[str] = None,
     preferred_model: Optional[str] = None,
     preferred_tts_provider: Optional[str] = None,
+    llm_device_preference: Optional[str] = "auto",
+    tts_device_preference: Optional[str] = "auto",
     user_id: int = Depends(auth_service.get_current_user),
 ):
-    _ = user_id
     return await coach_service.get_runtime_status(
         warm=warm,
         mode=mode,
+        session_id=session_id,
+        user_id=user_id,
         preferred_model=preferred_model,
         preferred_tts_provider=preferred_tts_provider,
+        llm_device_preference=llm_device_preference,
+        tts_device_preference=tts_device_preference,
     )
 
 

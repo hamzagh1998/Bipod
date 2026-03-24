@@ -18,18 +18,23 @@ from pydantic import BaseModel, Field
 
 logger = logging.getLogger("bipod.openvoice")
 
-_IMPORT_ERROR = ""
+_OPENVOICE_IMPORT_ERROR = ""
+_MELO_IMPORT_ERROR = ""
 try:
     import requests
     import torch
-    from melo.api import TTS
     from openvoice.api import ToneColorConverter
 except Exception as exc:  # pragma: no cover - runtime dependency guard
     requests = None  # type: ignore[assignment]
     torch = None  # type: ignore[assignment]
-    TTS = None  # type: ignore[assignment]
     ToneColorConverter = None  # type: ignore[assignment]
-    _IMPORT_ERROR = str(exc)
+    _OPENVOICE_IMPORT_ERROR = str(exc)
+
+try:
+    from melo.api import TTS
+except Exception as exc:  # pragma: no cover - runtime dependency guard
+    TTS = None  # type: ignore[assignment]
+    _MELO_IMPORT_ERROR = str(exc)
 
 
 class SynthesizeRequest(BaseModel):
@@ -189,7 +194,7 @@ class OpenVoiceRuntime:
     def _checkpoints_url(self) -> str:
         return str(
             os.environ.get("COACH_OPENVOICE_CHECKPOINTS_URL")
-            or "https://myshell-public-repo-hosting.s3.amazonaws.com/openvoice/checkpoints_v2_0417.zip"
+            or "https://myshell-public-repo-host.s3.amazonaws.com/openvoice/checkpoints_v2_0417.zip"
         ).strip()
 
     def _local_files_only(self) -> bool:
@@ -199,6 +204,22 @@ class OpenVoiceRuntime:
             "yes",
             "on",
         }
+
+    def _allow_espeak_base(self) -> bool:
+        return str(os.environ.get("COACH_OPENVOICE_ALLOW_ESPEAK_BASE", "true")).strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+
+    def _base_tts_engine(self, runtime_device: str) -> str:
+        configured = str(os.environ.get("COACH_OPENVOICE_BASE_TTS", "auto")).strip().lower()
+        if configured in {"melo", "espeak"}:
+            return configured
+        if str(runtime_device or "").strip().lower() == "cpu":
+            return "espeak"
+        return "melo"
 
     def _ensure_checkpoints(self) -> Path:
         root = self._download_root()
@@ -306,12 +327,95 @@ class OpenVoiceRuntime:
         return payload
 
     def _load_or_create_melo(self, language_key: str, runtime_device: str) -> Any:
+        if TTS is None:
+            raise RuntimeError(f"MeloTTS is unavailable: {_MELO_IMPORT_ERROR or 'unknown import error'}")
         cache_key = (language_key, runtime_device)
         if cache_key in self._melo_models:
             return self._melo_models[cache_key]
         model = TTS(language=language_key, device=runtime_device)
         self._melo_models[cache_key] = model
         return model
+
+    def _espeak_voice_name(self, language: Optional[str]) -> str:
+        language_map = {
+            "ar": "ar",
+            "arabic": "ar",
+            "de": "de",
+            "german": "de",
+            "el": "el",
+            "greek": "el",
+            "en": "en-us",
+            "english": "en-us",
+            "es": "es",
+            "spanish": "es",
+            "fr": "fr",
+            "french": "fr",
+            "hi": "hi",
+            "hindi": "hi",
+            "it": "it",
+            "italian": "it",
+            "ja": "ja",
+            "japanese": "ja",
+            "ko": "ko",
+            "korean": "ko",
+            "nl": "nl",
+            "dutch": "nl",
+            "pl": "pl",
+            "polish": "pl",
+            "pt": "pt",
+            "portuguese": "pt",
+            "ru": "ru",
+            "russian": "ru",
+            "sv": "sv",
+            "swedish": "sv",
+            "tr": "tr",
+            "turkish": "tr",
+            "uk": "uk",
+            "ukrainian": "uk",
+            "ur": "ur",
+            "urdu": "ur",
+            "zh": "zh",
+            "chinese": "zh",
+        }
+        normalized = str(language or "").strip().lower()
+        if normalized in language_map:
+            return language_map[normalized]
+        if len(normalized) == 2 and normalized in language_map:
+            return language_map[normalized]
+        return "en-us"
+
+    def _synthesize_source_with_espeak(self, *, text: str, language: Optional[str], out_path: Path) -> None:
+        try:
+            subprocess.run(
+                [
+                    "espeak-ng",
+                    "-v",
+                    self._espeak_voice_name(language),
+                    "-s",
+                    "155",
+                    "-p",
+                    "45",
+                    "-w",
+                    str(out_path),
+                    text,
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except subprocess.CalledProcessError as exc:
+            stderr = str(exc.stderr or exc.stdout or "").strip()
+            raise RuntimeError(stderr or "espeak-ng synthesis failed") from exc
+        if not out_path.exists() or out_path.stat().st_size <= 0:
+            raise RuntimeError("espeak-ng produced empty audio.")
+
+    def _extract_speaker_embedding(self, *, audio_path: Path, save_path: Path) -> Any:
+        result = self._converter.extract_se([str(audio_path)], se_save_path=str(save_path))
+        if isinstance(result, tuple):
+            if not result:
+                raise RuntimeError("OpenVoice extractor returned an empty result.")
+            return result[0]
+        return result
 
     def _init_model(self, model_id: Optional[str], runtime_device: Optional[str]) -> bool:
         target_model_id = str(model_id or os.environ.get("COACH_OPENVOICE_MODEL_ID") or "openvoice-v2").strip()
@@ -322,13 +426,13 @@ class OpenVoiceRuntime:
         with self._init_lock:
             if self._converter is not None and self._model_id == target_model_id and self._model_device == target_device:
                 return True
-            if ToneColorConverter is None or TTS is None or torch is None:
+            if ToneColorConverter is None or torch is None:
                 self._converter = None
                 self._melo_models = {}
                 self._model_id = ""
                 self._model_device = ""
                 self._checkpoints_dir = None
-                self._last_init_error = _IMPORT_ERROR or "OpenVoice dependencies are unavailable."
+                self._last_init_error = _OPENVOICE_IMPORT_ERROR or "OpenVoice dependencies are unavailable."
                 self._set_status(
                     state="error",
                     detail=f"OpenVoice dependencies are unavailable: {self._last_init_error}",
@@ -343,7 +447,17 @@ class OpenVoiceRuntime:
                 if not converter_config.exists() or not converter_ckpt.exists():
                     raise RuntimeError("OpenVoice converter checkpoint files are missing.")
 
-                converter = ToneColorConverter(str(converter_config), device=target_device, enable_watermark=False)
+                try:
+                    converter = ToneColorConverter(
+                        str(converter_config),
+                        device=target_device,
+                        enable_watermark=False,
+                    )
+                except TypeError:
+                    try:
+                        converter = ToneColorConverter(str(converter_config), device=target_device)
+                    except TypeError:
+                        converter = ToneColorConverter(str(converter_config))
                 converter.load_ckpt(str(converter_ckpt))
                 self._converter = converter
                 self._melo_models = {}
@@ -351,9 +465,12 @@ class OpenVoiceRuntime:
                 self._model_device = target_device
                 self._checkpoints_dir = checkpoints
                 self._last_init_error = ""
+                detail = "OpenVoice model ready."
+                if TTS is None:
+                    detail = "OpenVoice model ready (MeloTTS unavailable, using espeak base voice)."
                 self._set_status(
                     state="ready",
-                    detail="OpenVoice model ready.",
+                    detail=detail,
                     model_id=target_model_id,
                 )
                 return True
@@ -437,19 +554,63 @@ class OpenVoiceRuntime:
 
         runtime_device_resolved = str(self._model_device or self._resolve_runtime_device(runtime_device)).strip() or "cpu"
         language_key = self._language_key(language)
-        model = self._load_or_create_melo(language_key=language_key, runtime_device=runtime_device_resolved)
-        speaker_id, speaker_key = self._pick_speaker(model=model, voice_preset=voice_preset)
+        use_espeak_base = self._base_tts_engine(runtime_device_resolved) == "espeak"
+        melo_model: Any = None
+        speaker_id = 0
+        speaker_key = "en-newest"
+        melo_error_detail = ""
+        if TTS is None and not use_espeak_base:
+            use_espeak_base = self._allow_espeak_base()
+            melo_error_detail = _MELO_IMPORT_ERROR or "MeloTTS unavailable."
+        if not use_espeak_base and TTS is not None:
+            try:
+                melo_model = self._load_or_create_melo(language_key=language_key, runtime_device=runtime_device_resolved)
+                speaker_id, speaker_key = self._pick_speaker(model=melo_model, voice_preset=voice_preset)
+            except Exception as exc:
+                use_espeak_base = self._allow_espeak_base()
+                melo_error_detail = str(exc)
+                logger.warning("MeloTTS unavailable for language=%s: %s", language_key, exc)
+        if melo_model is None and not use_espeak_base:
+            raise RuntimeError(f"MeloTTS unavailable and espeak fallback disabled: {melo_error_detail}")
 
         with tempfile.TemporaryDirectory(prefix="openvoice-") as tmp_dir:
             tmp_root = Path(tmp_dir)
             src_path = tmp_root / "source.wav"
-            model.tts_to_file(
-                text,
-                speaker_id,
-                str(src_path),
-                speed=1.0,
-                quiet=True,
-            )
+            source_se = None
+            if melo_model is not None:
+                try:
+                    melo_model.tts_to_file(
+                        text,
+                        speaker_id,
+                        str(src_path),
+                        speed=1.0,
+                        quiet=True,
+                    )
+                    source_se_path = self._source_se_path(speaker_key=speaker_key)
+                    source_se = torch.load(str(source_se_path), map_location=runtime_device_resolved)
+                except Exception as exc:
+                    if not self._allow_espeak_base():
+                        raise RuntimeError(f"MeloTTS synthesis failed: {exc}") from exc
+                    logger.warning("MeloTTS synthesis failed, falling back to espeak base voice: %s", exc)
+                    self._synthesize_source_with_espeak(text=text, language=language, out_path=src_path)
+                    try:
+                        source_se = self._extract_speaker_embedding(
+                            audio_path=src_path,
+                            save_path=tmp_root / "source_se.pt",
+                        )
+                    except Exception as convert_exc:
+                        raise RuntimeError(
+                            f"OpenVoice source speaker embedding failed after Melo fallback: {convert_exc}"
+                        ) from convert_exc
+            else:
+                self._synthesize_source_with_espeak(text=text, language=language, out_path=src_path)
+                try:
+                    source_se = self._extract_speaker_embedding(
+                        audio_path=src_path,
+                        save_path=tmp_root / "source_se.pt",
+                    )
+                except Exception as exc:
+                    raise RuntimeError(f"OpenVoice source speaker embedding failed: {exc}") from exc
 
             if not clone_mode or not reference_audio_bytes:
                 payload = src_path.read_bytes()
@@ -459,12 +620,13 @@ class OpenVoiceRuntime:
 
             reference_path = self._write_reference_file(reference_audio_bytes=reference_audio_bytes, workdir=tmp_root)
             try:
-                target_se, _ = self._converter.extract_se([str(reference_path)], se_save_path=str(tmp_root / "target_se.pt"))
+                target_se = self._extract_speaker_embedding(
+                    audio_path=reference_path,
+                    save_path=tmp_root / "target_se.pt",
+                )
             except Exception as exc:
                 raise RuntimeError(f"OpenVoice target speaker embedding failed: {exc}") from exc
 
-            source_se_path = self._source_se_path(speaker_key=speaker_key)
-            source_se = torch.load(str(source_se_path), map_location=runtime_device_resolved)
             out_path = tmp_root / "output.wav"
             self._converter.convert(
                 audio_src_path=str(src_path),

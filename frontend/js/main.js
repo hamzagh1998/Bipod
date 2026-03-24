@@ -41,6 +41,8 @@ async function init() {
         let tierLabel = "Efficient";
         if (config.active_imagine_model === "flux-schnell")
           tierLabel = "Ultra (Flux)";
+        else if (config.active_imagine_model === "juggernaut-xl")
+          tierLabel = "High (Juggernaut)";
         else if (config.active_imagine_model === "sdxl-lightning")
           tierLabel = "High (Lightning)";
 

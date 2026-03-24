@@ -48,6 +48,7 @@ class CosyVoiceRuntime:
         self._status_updated_at = time.time()
         self._status_model_id: Optional[str] = None
         self._builtin_voice_cache: dict[str, bytes] = {}
+        self._primed_model_keys: set[str] = set()
 
     def _set_status(self, *, state: str, detail: str, model_id: Optional[str]) -> None:
         with self._status_lock:
@@ -123,6 +124,27 @@ class CosyVoiceRuntime:
         if self._detect_gpu_available() and self._detect_gpu_vram_gb() >= high_vram_threshold:
             return "cuda"
         return "cpu"
+
+    def _cache_root(self) -> Path:
+        configured = str(os.environ.get("COACH_COSYVOICE_DOWNLOAD_ROOT") or "/app/data/modelscope").strip()
+        root = Path(configured or "/app/data/modelscope")
+        root.mkdir(parents=True, exist_ok=True)
+        return root
+
+    def _cached_model_path(self, model_id: str) -> Path:
+        normalized = str(model_id or "").strip().replace("\\", "/").strip("/")
+        if not normalized:
+            normalized = "iic/CosyVoice-300M"
+        return self._cache_root() / normalized
+
+    def _cached_model_is_ready(self, model_path: Path) -> bool:
+        if not model_path.exists() or not model_path.is_dir():
+            return False
+        required_any = ("cosyvoice.yaml", "cosyvoice2.yaml")
+        if not any((model_path / name).exists() for name in required_any):
+            return False
+        required_all = ("llm.pt", "flow.pt", "hift.pt")
+        return all((model_path / name).exists() for name in required_all)
 
     def ensure_warmup(self, requested_model_id: Optional[str], requested_device: Optional[str] = None) -> bool:
         model_id = str(requested_model_id or os.environ.get("COACH_COSYVOICE_MODEL_ID") or "").strip() or "iic/CosyVoice-300M"
@@ -207,15 +229,25 @@ class CosyVoiceRuntime:
                 return True
 
             model_source = model_id
-            if not Path(model_id).exists():
+            configured_local_only = str(os.environ.get("COACH_COSYVOICE_LOCAL_FILES_ONLY", "false")).strip().lower() in {
+                "1",
+                "true",
+                "yes",
+                "on",
+            }
+            local_after_cache = str(os.environ.get("COACH_COSYVOICE_LOCAL_AFTER_CACHE", "true")).strip().lower() in {
+                "1",
+                "true",
+                "yes",
+                "on",
+            }
+            cached_model_path = self._cached_model_path(model_id)
+            if local_after_cache and self._cached_model_is_ready(cached_model_path):
+                model_source = str(cached_model_path)
+            elif not Path(model_id).exists():
                 self._set_status(state="downloading", detail=f"Downloading voice model assets for {model_id}.", model_id=model_id)
-                local_only = str(os.environ.get("COACH_COSYVOICE_LOCAL_FILES_ONLY", "false")).strip().lower() in {
-                    "1",
-                    "true",
-                    "yes",
-                    "on",
-                }
-                cache_dir = str(os.environ.get("COACH_COSYVOICE_DOWNLOAD_ROOT", "/app/data/modelscope")).strip()
+                local_only = configured_local_only
+                cache_dir = str(self._cache_root())
                 allow_patterns = [
                     "cosyvoice*.yaml",
                     "llm.pt",
@@ -296,8 +328,45 @@ class CosyVoiceRuntime:
             self._last_init_error = ""
             self._model_id = model_id
             self._model_device = resolved_device
+            prime_enabled = str(os.environ.get("COACH_COSYVOICE_PRIME_ON_LOAD", "true")).strip().lower() in {
+                "1",
+                "true",
+                "yes",
+                "on",
+            }
+            model_key = f"{model_id}@{resolved_device}"
+            if prime_enabled and resolved_device == "cuda" and model_key not in self._primed_model_keys:
+                self._set_status(
+                    state="warming",
+                    detail=f"Priming voice model ({model_id}) on cuda for low-latency playback.",
+                    model_id=model_id,
+                )
+                self._prime_model_inference(model_id=model_id)
+                self._primed_model_keys.add(model_key)
             self._set_status(state="ready", detail="Voice model ready.", model_id=model_id)
             return True
+
+    def _prime_model_inference(self, *, model_id: str) -> None:
+        if self._model is None:
+            return
+        warm_text = str(os.environ.get("COACH_COSYVOICE_WARMUP_TEXT") or "Hello.").strip() or "Hello."
+        try:
+            if hasattr(self._model, "inference_sft"):
+                for kwargs in (
+                    {"tts_text": warm_text, "spk_id": "default", "stream": False},
+                    {"text": warm_text, "spk_id": "default", "stream": False},
+                ):
+                    try:
+                        outputs = list(self._model.inference_sft(**kwargs))
+                        if outputs:
+                            self._merge_outputs(outputs)
+                            return
+                    except Exception:
+                        logger.debug("CosyVoice prime inference kwargs failed: %s", kwargs)
+                        continue
+            logger.debug("CosyVoice prime inference skipped: no compatible inference method found.")
+        except Exception:
+            logger.exception("CosyVoice prime inference failed for model_id=%s", model_id)
 
     def _convert_reference_to_wav(self, raw_bytes: bytes) -> Path:
         input_path = tempfile.NamedTemporaryFile(delete=False, suffix=".bin")
