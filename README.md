@@ -10,6 +10,128 @@ Bipod is a self-sovereign AI companion designed to be free from the cloud. It is
 
 ---
 
+## ✨ Features
+
+- **Conversational AI** — Multi-turn chat with tool-calling, powered by Ollama LLMs (Qwen, Llama, Moondream)
+- **Intent Routing** — Automatic classification of user intent (web search, image generation, file operations, vision analysis, coding, system info) with rule-first + semantic fallback
+- **Image Generation & Upscaling** — Local Stable Diffusion (SDXL Lightning, Flux.1-schnell, Juggernaut XL, Realistic Vision, Tiny SD) with Swin2SR and Real-ESRGAN upscaling
+- **Imagine Studio** — Dedicated workspace for project-based image creation with prompt improvement, batch generation, and organization
+- **Language Coach** — Speaking practice in 18+ languages with real-time ASR (Faster-Whisper), pronunciation feedback, grammar correction (LanguageTool), and mistake tracking
+- **Voice & TTS** — Text-to-speech via CosyVoice (4 built-in voices) or OpenVoice (voice cloning), with ESpeak fallback
+- **Semantic Long-Term Memory** — FAISS vector database with `nomic-embed-text` embeddings for persistent context across conversations
+- **Vision Analysis** — Image understanding via Moondream model
+- **File Operations** — Sandboxed host filesystem access (read, write, search, move, delete) with path validation
+- **Web Search** — DuckDuckGo integration for real-time information retrieval
+- **Authentication** — JWT-based user authentication with BCrypt password hashing
+- **Hardware-Aware** — Automatic model selection and context window sizing based on detected GPU/CPU/ARM64 capabilities
+
+---
+
+## 🏗️ Architecture
+
+Bipod uses a **Sidecar Pattern** with six containerized services:
+
+| Service | Container | Port | Purpose | GPU |
+| :--- | :--- | :--- | :--- | :--- |
+| **bipod-app** | `bipod_brain` | 4444 | FastAPI logic server (brain, chat, coach, studio, auth) | Optional |
+| **ollama** | `bipod_ollama` | 11434 | LLM inference (Qwen, Llama, Moondream, nomic-embed-text) | Yes |
+| **imagine** | `bipod_imagine` | 3333 | Image generation (diffusers) & upscaling | Yes |
+| **cosyvoice** | `bipod_cosyvoice` | 5001 | TTS synthesis (CosyVoice-300M) | Optional |
+| **openvoice** | `bipod_openvoice` | 5002 | Voice cloning (OpenVoice v2, Melo TTS) | Optional |
+| **languagetool** | `bipod_languagetool` | 8010 | Grammar checking | No |
+
+All services share the `./data` volume for models, vectors, generated files, and uploads. Services communicate over an internal `bipod-network` Docker network.
+
+---
+
+## 🧰 Tech Stack
+
+| Area | Technologies |
+| :--- | :--- |
+| **Backend** | FastAPI, Pydantic, SQLAlchemy (async), aiosqlite, SQLite |
+| **AI / LLM** | Ollama, LangChain, semantic-router, FAISS (vector search) |
+| **Image Gen** | diffusers, transformers, Swin2SR, Real-ESRGAN, Hugging Face Hub |
+| **Speech** | Faster-Whisper (ASR), CosyVoice, OpenVoice / Melo TTS, ESpeak |
+| **Auth** | python-jose (JWT/HS256), passlib + BCrypt |
+| **Search** | duckduckgo-search |
+| **Frontend** | Vanilla HTML/CSS/JS (Chat, Studio), React bundle (Coach), Marked.js, highlight.js |
+| **Infrastructure** | Docker Compose, NVIDIA Container Toolkit |
+
+---
+
+## 📁 Project Structure
+
+```
+app/                  # FastAPI backend
+├── api/              #   Route handlers & Pydantic schemas
+├── core/             #   Config (hardware detection, env vars) & logging
+├── db/               #   SQLAlchemy models & database setup
+├── services/         #   Domain logic
+│   ├── brain/        #     Brain sub-services (answer composer, context builder, router, tool orchestrator)
+│   ├── brain_service.py    Central intelligence with tool calling
+│   ├── coach_service.py    Language coaching pipeline (ASR + TTS + LLM)
+│   ├── intent_router.py    Intent classification & routing
+│   ├── memory_service.py   Conversation persistence (SQLite)
+│   ├── vector_service.py   Semantic long-term memory (FAISS)
+│   ├── studio_service.py   Image project management
+│   ├── file_service.py     Host filesystem operations (sandboxed)
+│   ├── vision_service.py   Image analysis (Moondream)
+│   ├── audio_service.py    Audio processing
+│   └── auth_service.py     JWT authentication
+└── agents/           #   Agent definitions
+frontend/             # Static client assets
+├── index.html        #   Chat interface
+├── studio.html       #   Imagine Studio
+├── coach.html        #   Language Coach (React app loader)
+├── js/ & css/        #   Client scripts & styles
+imagine/              # Image generation sidecar (FastAPI, port 3333)
+cosyvoice/            # CosyVoice TTS sidecar (FastAPI, port 5001)
+openvoice_sidecar/    # OpenVoice TTS sidecar (FastAPI, port 5002)
+tests/                # Pytest test suite
+docker/               # Dockerfiles for each service
+scripts/              # Build & preload scripts
+data/                 # Runtime artifacts (models, vectors, DB, uploads, generated files)
+```
+
+---
+
+## 🧠 Brain & Intelligence
+
+### Model Tiers
+
+Bipod automatically selects a brain model based on hardware, or you can override via environment variables:
+
+| Tier | Model | Use Case | Requirement |
+| :--- | :--- | :--- | :--- |
+| **Smart** | `qwen2.5:7b` | Tool calling, precision tasks | 8GB+ VRAM |
+| **Heavy** | `qwen3:8b` | Creative, high-intelligence tasks | 8GB+ VRAM/RAM |
+| **Medium** | `llama3.2:3b` | Standard PC / CPU fallback | 4GB+ RAM |
+| **Light** | `llama3.2:1b` | Raspberry Pi / edge devices | 2GB+ RAM |
+| **Vision** | `moondream` | Image analysis | Minimal |
+| **Embedding** | `nomic-embed-text` | Vector embeddings (long-term memory) | Minimal |
+
+### Tool Calling
+
+The brain orchestrates tools iteratively — when a user request requires action (web search, file operation, image generation, vision analysis, system info), the intent router classifies the request and the tool orchestrator manages multi-step tool/model turns with hallucination detection.
+
+### Context Management
+
+- **Recent history**: Last 10 messages kept in full
+- **History summarization**: Triggered at 14 messages; older messages are compressed via LLM summary
+- **Long-term memory**: Top 3 relevant semantic memories retrieved per turn from the FAISS vector store
+- **Attachments**: Images and PDFs included in context (up to 12,000 chars per attachment)
+
+### Semantic Long-Term Memory
+
+Bipod maintains a per-user FAISS vector index for persistent context across conversations:
+
+- **Embedding model**: `nomic-embed-text` via Ollama
+- **Chunk size**: Up to 6,000 characters (~1,500 tokens) with overlapping chunks
+- **Storage**: Local FAISS index files in `data/vector/`
+- **Retrieval**: Top-K semantic similarity search on each turn
+
+---
+
 ## 🛠️ Hardware Setup: NVIDIA GPU Configuration
 
 To leverage GPU acceleration for inference (Ollama) and audio processing (Faster-Whisper), you must configure the NVIDIA Container Toolkit.
@@ -76,7 +198,7 @@ docker run --rm --runtime=nvidia --gpus all nvidia/cuda:12.4.1-base-ubuntu22.04 
 
 ## 🚀 Getting Started
 
-Bipod uses a **Sidecar Pattern**, separating the Inference Server (Ollama) from the Logic Server (FastAPI).
+### Docker (Recommended)
 
 1. **Clone the repository.**
 2. **Launch the stack:**
@@ -90,6 +212,31 @@ Bipod uses a **Sidecar Pattern**, separating the Inference Server (Ollama) from 
    ```bash
    docker compose logs -f
    ```
+
+4. **Pull required models** (see [Required Models](#-required-models) below).
+5. **Open** `http://localhost:4444` in your browser.
+
+### Local Development (Without Docker)
+
+1. **Install dependencies:**
+
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+2. **Start Ollama** locally (see [ollama.com](https://ollama.com)):
+
+   ```bash
+   ollama serve
+   ```
+
+3. **Run the app:**
+
+   ```bash
+   uvicorn app.main:app --host 0.0.0.0 --port 4444 --reload
+   ```
+
+   The app automatically detects whether it's inside Docker or local and adjusts service URLs accordingly (`localhost` vs container hostnames).
 
 ## 🧩 Coach Frontend Build (Local Bundle)
 
@@ -276,6 +423,217 @@ Bipod is designed to scale down. On devices without a GPU, it gracefully falls b
 
 - **Quantized GGUF models** for CPU inference.
 - **Moondream** (Efficient Mode) for vision tasks.
+
+---
+
+## 🎙️ Voice & TTS
+
+Bipod supports three TTS providers, selected via `COACH_TTS_PROVIDER`:
+
+| Provider | Model | Voice Cloning | Languages | GPU Required |
+| :--- | :--- | :--- | :--- | :--- |
+| **CosyVoice** | CosyVoice-300M | Yes (reference audio) | Multi-language | Optional |
+| **OpenVoice** | OpenVoice v2 + Melo TTS | Yes (tone color conversion) | 18+ languages | Optional |
+| **ESpeak** | — | No | Broad | No |
+
+**CosyVoice built-in voices**: Anby, BMO, Goku, Gute
+
+**OpenVoice supported languages**: Arabic, German, Greek, English, Spanish, French, Hindi, Italian, Japanese, Korean, Dutch, Polish, Portuguese, Russian, Swedish, Turkish, Ukrainian, Urdu, Chinese
+
+---
+
+## 📡 API Reference
+
+All endpoints are under `/api/v1`. The app also serves interactive docs at `/docs` (Swagger) and `/redoc`.
+
+### Health & System
+
+| Method | Endpoint | Description |
+| :--- | :--- | :--- |
+| GET | `/health` | System status check |
+| GET | `/system/config` | Hardware capabilities & available models |
+
+### Authentication
+
+| Method | Endpoint | Description |
+| :--- | :--- | :--- |
+| POST | `/auth/signup` | Register user (returns JWT) |
+| POST | `/auth/login` | Authenticate user (returns JWT) |
+| GET | `/auth/me` | Get current user info |
+
+### Chat
+
+| Method | Endpoint | Description |
+| :--- | :--- | :--- |
+| POST | `/chat` | Single-turn chat (blocking) |
+| POST | `/chat/stream` | Streaming chat with progress events |
+| POST | `/clear` | Clear memory for a conversation |
+
+### Conversations
+
+| Method | Endpoint | Description |
+| :--- | :--- | :--- |
+| GET | `/conversations` | List user conversations |
+| POST | `/conversations` | Create new conversation |
+| GET | `/conversations/{id}/messages` | Get conversation history |
+| PATCH | `/conversations/{id}` | Update (title, archive, password) |
+| POST | `/conversations/{id}/unlock` | Unlock archived conversation |
+| DELETE | `/conversations/{id}` | Delete conversation |
+
+### Image Generation
+
+| Method | Endpoint | Description |
+| :--- | :--- | :--- |
+| POST | `/generate` | Generate image (proxies to Imagine service) |
+| POST | `/upscale` | Upscale image (Swin2SR or Real-ESRGAN) |
+
+### Studio (Image Projects)
+
+| Method | Endpoint | Description |
+| :--- | :--- | :--- |
+| GET | `/studio/projects` | List projects |
+| POST | `/studio/projects` | Create project |
+| DELETE | `/studio/projects/{id}` | Delete project |
+| GET | `/studio/projects/{id}/images` | List project images |
+| DELETE | `/studio/projects/{id}/images/{image_id}` | Delete image |
+| POST | `/studio/prompt-improve` | Improve image prompt via LLM |
+
+<details>
+<summary><strong>Coach (Language Learning) — 15+ endpoints</strong></summary>
+
+| Method | Endpoint | Description |
+| :--- | :--- | :--- |
+| POST | `/coach/sessions` | Create coaching session |
+| GET | `/coach/sessions` | List sessions |
+| GET | `/coach/sessions/{id}` | Get session details |
+| DELETE | `/coach/sessions/{id}` | Delete session |
+| PATCH | `/coach/sessions/{id}/settings` | Update session settings |
+| GET | `/coach/sessions/{id}/turns` | List recorded turns |
+| GET | `/coach/sessions/{id}/mistakes` | List mistakes with feedback |
+| GET | `/coach/sessions/{id}/progress` | Session progress |
+| POST | `/coach/sessions/{id}/end` | End & summarize session |
+| GET | `/coach/progress` | Overall user progress |
+| POST | `/coach/turns/stream` | Audio streaming turn (multipart) |
+| POST | `/coach/turns/text` | Text-based coaching turn |
+| POST | `/coach/tts` | Text-to-speech synthesis |
+| GET | `/coach/tts/status` | TTS service status |
+| GET | `/coach/runtime/status` | Runtime status (LLM + TTS) |
+| POST | `/coach/runtime/preload` | Preload models into memory |
+| GET | `/coach/languages/supported` | List supported languages |
+| POST | `/coach/voices/reference` | Upload voice sample for cloning |
+
+</details>
+
+---
+
+## ⚙️ Environment Variables
+
+Configure via `.env` file or environment. Key variables:
+
+<details>
+<summary><strong>Full environment variable reference</strong></summary>
+
+### Hardware (Auto-Detected)
+
+| Variable | Default | Description |
+| :--- | :--- | :--- |
+| `HARDWARE_TARGET` | auto | `arm64` or `amd64` |
+| `USE_GPU` | auto | NVIDIA GPU detected via `nvidia-smi` |
+| `GPU_VRAM` | auto | Largest visible GPU VRAM in GB |
+
+### Brain Models
+
+| Variable | Default | Description |
+| :--- | :--- | :--- |
+| `SMART_MODEL` | `qwen2.5:7b` | Tool calling, precision |
+| `HEAVY_MODEL` | `qwen3:8b` | Intelligence, creativity |
+| `MEDIUM_MODEL` | `llama3.2:3b` | Standard CPU fallback |
+| `LIGHT_MODEL` | `llama3.2:1b` | Edge / low resource |
+| `VISION_MODEL` | `moondream` | Image analysis |
+| `EMBEDDING_MODEL` | `nomic-embed-text` | Vector embeddings |
+
+### Ollama Runtime
+
+| Variable | Default | Description |
+| :--- | :--- | :--- |
+| `OLLAMA_NUM_CTX` | auto (2048–32768) | Context window, sized to GPU VRAM |
+| `OLLAMA_TEMPERATURE` | `0.3` | Generation temperature |
+| `RECENT_HISTORY_MESSAGES` | `10` | Messages kept in full context |
+| `HISTORY_SUMMARY_TRIGGER` | `14` | Message count that triggers summarization |
+| `MAX_MEMORY_ITEMS` | `3` | Long-term memory results per turn |
+
+### Routing
+
+| Variable | Default | Description |
+| :--- | :--- | :--- |
+| `ROUTER_USE_SEMANTIC_FALLBACK` | `true` | Enable semantic intent fallback |
+| `ROUTER_SEMANTIC_THRESHOLD` | `0.6` | Minimum similarity for semantic match |
+| `ROUTER_MARGIN_THRESHOLD` | `0.08` | Margin between top-2 intent scores |
+
+### Coach (ASR & TTS)
+
+| Variable | Default | Description |
+| :--- | :--- | :--- |
+| `COACH_WHISPER_MODEL` | `auto` | Faster-Whisper model |
+| `COACH_TTS_PROVIDER` | `espeak` | `espeak`, `cosyvoice`, or `openvoice` |
+| `COACH_RUNTIME_PROFILE` | `auto` | `auto`, `cpu`, `gpu_constrained`, `gpu_full` |
+| `COACH_HIGH_VRAM_THRESHOLD_GB` | `16` | VRAM threshold for `gpu_full` profile |
+| `COACH_COSYVOICE_MODEL_ID` | `iic/CosyVoice-300M` | CosyVoice model |
+| `COACH_OPENVOICE_MODEL_ID` | `openvoice-v2` | OpenVoice model |
+
+### Imagine
+
+| Variable | Default | Description |
+| :--- | :--- | :--- |
+| `HF_TOKEN` | — | Hugging Face token (for gated models like Flux) |
+| `OFFLINE_MODE` | `true` | Use cached models only |
+
+### Auth
+
+| Variable | Default | Description |
+| :--- | :--- | :--- |
+| `SECRET_KEY` | built-in | JWT signing key (change in production) |
+| `ACCESS_TOKEN_EXPIRE_MINUTES` | `10080` | Token expiry (7 days) |
+
+</details>
+
+---
+
+## 🧪 Testing
+
+Tests live under `tests/` and run with pytest:
+
+```bash
+pytest -q
+```
+
+Test coverage includes:
+
+| Test File | Coverage Area |
+| :--- | :--- |
+| `test_answer_composer.py` | Response sanitization |
+| `test_brain_handoff.py` | Tool orchestration logic |
+| `test_brain_image_generation_contract.py` | Image generation API contract |
+| `test_brain_service_file_handoff.py` | File operation handling |
+| `test_brain_service_search_contract.py` | Web search & memory retrieval |
+| `test_chat_stream_api.py` | Streaming chat events |
+| `test_coach_api.py` | Coach endpoint contracts |
+| `test_coach_models.py` | Coach model loading |
+| `test_coach_service.py` | Coach service logic |
+| `test_config_runtime_defaults.py` | Hardware auto-detection & config defaults |
+| `test_db_schema_patches.py` | Database schema migrations |
+| `test_router_service.py` | Intent routing classification |
+
+---
+
+## 🤝 Contributing
+
+- Follow **Conventional Commits**: `feat:`, `fix:`, `chore:`, `docs:`
+- Use 4-space indentation, explicit type hints, and `async`/`await` for I/O paths
+- Keep imports ordered: standard library, third-party, local modules
+- Use structured logging via `app/core/logger.py` (`get_logger(...)`) — no `print`
+- Run `pytest -q` before opening a PR
+- See [AGENTS.md](AGENTS.md) for full coding conventions and PR guidelines
 
 ---
 
