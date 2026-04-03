@@ -9,6 +9,7 @@ import uuid
 import html
 import warnings
 from typing import Any, Awaitable, Callable, Dict, List, Optional
+
 try:
     from ddgs import DDGS  # type: ignore
 except ImportError:
@@ -27,6 +28,7 @@ from app.services.file_service import file_service
 logger = get_logger("bipod.brain")
 
 ProgressCallback = Callable[[str, Dict[str, Any]], Awaitable[None]]
+
 
 class BrainService:
     """The central intelligence service of Bipod with tool-calling capabilities."""
@@ -111,11 +113,11 @@ class BrainService:
     OLLAMA_CONNECT_TIMEOUT_SEC = 10.0
     OLLAMA_WRITE_TIMEOUT_SEC = 30.0
     OLLAMA_POOL_TIMEOUT_SEC = 30.0
-    
+
     def __init__(self):
         self.base_url = settings.OLLAMA_BASE_URL
         self.active_model = settings.ACTIVE_MODEL
-        
+
         # System Prompt following Bipod Philosophy
         self.system_prompt = (
             "You are Bipod, an AI agent running entirely on the user's local machine. "
@@ -167,8 +169,14 @@ class BrainService:
                     "parameters": {
                         "type": "object",
                         "properties": {
-                            "pattern": {"type": "string", "description": "The glob pattern to search for."},
-                            "root": {"type": "string", "description": "Optional directory to start search from (default: /)."},
+                            "pattern": {
+                                "type": "string",
+                                "description": "The glob pattern to search for.",
+                            },
+                            "root": {
+                                "type": "string",
+                                "description": "Optional directory to start search from (default: /).",
+                            },
                         },
                         "required": ["pattern"],
                     },
@@ -182,8 +190,14 @@ class BrainService:
                     "parameters": {
                         "type": "object",
                         "properties": {
-                            "path": {"type": "string", "description": "The absolute or relative path to the file on the host."},
-                            "max_chars": {"type": "integer", "description": "Optional character limit when reading large files."},
+                            "path": {
+                                "type": "string",
+                                "description": "The absolute or relative path to the file on the host.",
+                            },
+                            "max_chars": {
+                                "type": "integer",
+                                "description": "Optional character limit when reading large files.",
+                            },
                         },
                         "required": ["path"],
                     },
@@ -197,8 +211,14 @@ class BrainService:
                     "parameters": {
                         "type": "object",
                         "properties": {
-                            "path": {"type": "string", "description": "The absolute path on the host filesystem where the file should be saved (e.g. '/home/user/notes.txt')."},
-                            "content": {"type": "string", "description": "The exact text content to write into the file."},
+                            "path": {
+                                "type": "string",
+                                "description": "The absolute path on the host filesystem where the file should be saved (e.g. '/home/user/notes.txt').",
+                            },
+                            "content": {
+                                "type": "string",
+                                "description": "The exact text content to write into the file.",
+                            },
                         },
                         "required": ["path", "content"],
                     },
@@ -212,8 +232,14 @@ class BrainService:
                     "parameters": {
                         "type": "object",
                         "properties": {
-                            "path": {"type": "string", "description": "The absolute path to an EXISTING image file on the host."},
-                            "prompt": {"type": "string", "description": "Optional specific question or prompt about the image."},
+                            "path": {
+                                "type": "string",
+                                "description": "The absolute path to an EXISTING image file on the host.",
+                            },
+                            "prompt": {
+                                "type": "string",
+                                "description": "Optional specific question or prompt about the image.",
+                            },
                         },
                         "required": ["path"],
                     },
@@ -227,9 +253,25 @@ class BrainService:
                     "parameters": {
                         "type": "object",
                         "properties": {
-                            "prompt": {"type": "string", "description": "Description of the image. For best results, Bipod will expand this with quality tags like 'cinematic lighting, 8k, highly detailed, masterpiece'."},
-                            "image_path": {"type": "string", "description": "Optional. Path to an existing image file to use for variations."},
-                            "model_type": {"type": "string", "enum": ["sdxl-lightning", "juggernaut-xl", "flux-schnell", "stable-diffusion", "dalle-mini"], "description": "Model to use. Default 'sdxl-lightning'. 'juggernaut-xl' offers higher quality SDXL output."},
+                            "prompt": {
+                                "type": "string",
+                                "description": "Description of the image. For best results, Bipod will expand this with quality tags like 'cinematic lighting, 8k, highly detailed, masterpiece'.",
+                            },
+                            "image_path": {
+                                "type": "string",
+                                "description": "Optional. Path to an existing image file to use for variations.",
+                            },
+                            "model_type": {
+                                "type": "string",
+                                "enum": [
+                                    "sdxl-lightning",
+                                    "juggernaut-xl",
+                                    "flux-schnell",
+                                    "stable-diffusion",
+                                    "dalle-mini",
+                                ],
+                                "description": "Model to use. Default 'sdxl-lightning'. 'juggernaut-xl' offers higher quality SDXL output.",
+                            },
                         },
                         "required": ["prompt"],
                     },
@@ -243,8 +285,14 @@ class BrainService:
                     "parameters": {
                         "type": "object",
                         "properties": {
-                            "src": {"type": "string", "description": "The current absolute path to the file/directory."},
-                            "dest": {"type": "string", "description": "The new absolute path or destination directory."},
+                            "src": {
+                                "type": "string",
+                                "description": "The current absolute path to the file/directory.",
+                            },
+                            "dest": {
+                                "type": "string",
+                                "description": "The new absolute path or destination directory.",
+                            },
                         },
                         "required": ["src", "dest"],
                     },
@@ -258,7 +306,10 @@ class BrainService:
                     "parameters": {
                         "type": "object",
                         "properties": {
-                            "path": {"type": "string", "description": "The absolute path to the file/directory to delete."},
+                            "path": {
+                                "type": "string",
+                                "description": "The absolute path to the file/directory to delete.",
+                            },
                         },
                         "required": ["path"],
                     },
@@ -272,7 +323,10 @@ class BrainService:
                     "parameters": {
                         "type": "object",
                         "properties": {
-                            "directory": {"type": "string", "description": "The absolute path to the directory whose files should be organized."},
+                            "directory": {
+                                "type": "string",
+                                "description": "The absolute path to the directory whose files should be organized.",
+                            },
                         },
                         "required": ["directory"],
                     },
@@ -286,7 +340,10 @@ class BrainService:
                     "parameters": {
                         "type": "object",
                         "properties": {
-                            "command": {"type": "string", "description": "The full shell command to execute. Prefix host paths with /host."},
+                            "command": {
+                                "type": "string",
+                                "description": "The full shell command to execute. Prefix host paths with /host.",
+                            },
                         },
                         "required": ["command"],
                     },
@@ -297,11 +354,8 @@ class BrainService:
                 "function": {
                     "name": "get_system_info",
                     "description": "Returns current system information including CPU usage, GPU status, OS details, and current time.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {}
-                    }
-                }
+                    "parameters": {"type": "object", "properties": {}},
+                },
             },
             {
                 "type": "function",
@@ -311,11 +365,14 @@ class BrainService:
                     "parameters": {
                         "type": "object",
                         "properties": {
-                            "query": {"type": "string", "description": "The search query to look up on the internet."}
+                            "query": {
+                                "type": "string",
+                                "description": "The search query to look up on the internet.",
+                            }
                         },
-                        "required": ["query"]
-                    }
-                }
+                        "required": ["query"],
+                    },
+                },
             },
             {
                 "type": "function",
@@ -325,12 +382,15 @@ class BrainService:
                     "parameters": {
                         "type": "object",
                         "properties": {
-                            "url": {"type": "string", "description": "The URL of the web page to fetch."}
+                            "url": {
+                                "type": "string",
+                                "description": "The URL of the web page to fetch.",
+                            }
                         },
-                        "required": ["url"]
-                    }
-                }
-            }
+                        "required": ["url"],
+                    },
+                },
+            },
         ]
         self.tool_orchestrator = ToolOrchestrator(
             base_url=self.base_url,
@@ -412,7 +472,9 @@ class BrainService:
             noun in normalized for noun in visual_nouns
         )
 
-    def _extract_web_search_signal(self, content: str, user_input: str) -> Optional[str]:
+    def _extract_web_search_signal(
+        self, content: str, user_input: str
+    ) -> Optional[str]:
         """Detect explicit model handoff requests for web search.
 
         The exact sentinel is preferred, but we also recover a few common
@@ -422,7 +484,11 @@ class BrainService:
         if not content:
             return None
 
-        exact = re.search(r"\[\[\s*BIPOD_WEB_SEARCH\s*:\s*(.+?)\s*\]\]", content, re.IGNORECASE | re.DOTALL)
+        exact = re.search(
+            r"\[\[\s*BIPOD_WEB_SEARCH\s*:\s*(.+?)\s*\]\]",
+            content,
+            re.IGNORECASE | re.DOTALL,
+        )
         if exact:
             query = re.sub(r"\s+", " ", exact.group(1)).strip()
             return query or user_input
@@ -449,12 +515,18 @@ class BrainService:
 
         return None
 
-    def _extract_explicit_web_search_signal(self, content: str, user_input: str) -> Optional[str]:
+    def _extract_explicit_web_search_signal(
+        self, content: str, user_input: str
+    ) -> Optional[str]:
         """Read only the explicit model-to-middleware search sentinel."""
         if not content:
             return None
 
-        exact = re.search(r"\[\[\s*BIPOD_WEB_SEARCH\s*:\s*(.+?)\s*\]\]", content, re.IGNORECASE | re.DOTALL)
+        exact = re.search(
+            r"\[\[\s*BIPOD_WEB_SEARCH\s*:\s*(.+?)\s*\]\]",
+            content,
+            re.IGNORECASE | re.DOTALL,
+        )
         if not exact:
             return None
 
@@ -463,11 +535,18 @@ class BrainService:
 
     def _orchestration_has_web_lookup(self, orchestration) -> bool:
         """Return True once the middleware/model exchange already executed web retrieval."""
-        return any(tool in {"web_search", "fetch_web_page"} for tool in orchestration.executed_tools)
+        return any(
+            tool in {"web_search", "fetch_web_page"}
+            for tool in orchestration.executed_tools
+        )
 
-    def _should_enforce_web_search_contract(self, intent: Optional[str], orchestration) -> bool:
+    def _should_enforce_web_search_contract(
+        self, intent: Optional[str], orchestration
+    ) -> bool:
         """Current-fact routes must not return a direct answer without web retrieval."""
-        return intent == "web_search" and not self._orchestration_has_web_lookup(orchestration)
+        return intent == "web_search" and not self._orchestration_has_web_lookup(
+            orchestration
+        )
 
     def _normalize_web_search_query(self, query: str) -> str:
         """Canonicalize user phrasing into a more search-engine-friendly query."""
@@ -555,7 +634,7 @@ class BrainService:
         remainder = normalized
         for prefix in prefixes:
             if normalized.startswith(prefix):
-                remainder = normalized[len(prefix):]
+                remainder = normalized[len(prefix) :]
                 break
 
         role, separator, entity = remainder.rpartition(" of ")
@@ -567,7 +646,9 @@ class BrainService:
 
         return None
 
-    async def _expand_web_search_candidates_with_model(self, query: str, base_candidates: List[str]) -> List[str]:
+    async def _expand_web_search_candidates_with_model(
+        self, query: str, base_candidates: List[str]
+    ) -> List[str]:
         """Ask the local model to propose a few better search queries from user intent."""
         prompt = (
             "Rewrite the user's request into up to 4 concise web search queries.\n"
@@ -578,7 +659,9 @@ class BrainService:
         )
 
         try:
-            async with httpx.AsyncClient(timeout=20.0) as client:
+            async with httpx.AsyncClient(
+                timeout=self._ollama_request_timeout(include_tools=False)
+            ) as client:
                 response = await client.post(
                     f"{self.base_url}/api/chat",
                     json={
@@ -599,7 +682,9 @@ class BrainService:
                 )
                 response.raise_for_status()
         except Exception as exc:
-            logger.warning(f"Search query planning failed, using heuristic candidates: {exc}")
+            logger.warning(
+                f"Search query planning failed, using heuristic candidates: {exc}"
+            )
             return base_candidates
 
         content = response.json().get("message", {}).get("content", "").strip()
@@ -710,16 +795,22 @@ class BrainService:
                 if unit == "years":
                     return now - datetime.timedelta(days=quantity * 365)
 
-            normalized_candidate = re.sub(r"([A-Za-z]+)\.(\s+\d{1,2},\s+\d{4})", r"\1\2", candidate)
+            normalized_candidate = re.sub(
+                r"([A-Za-z]+)\.(\s+\d{1,2},\s+\d{4})", r"\1\2", candidate
+            )
             for date_match in re.finditer(
                 r"\b\d{4}[-/]\d{2}[-/]\d{2}\b|\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)[a-z]*\.?\s+\d{1,2},\s+\d{4}\b|\b\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)[a-z]*\.?\s+\d{4}\b",
                 normalized_candidate,
                 re.IGNORECASE,
             ):
-                raw_date = date_match.group(0).replace("Sept ", "Sep ").replace("Sept.", "Sep")
+                raw_date = (
+                    date_match.group(0).replace("Sept ", "Sep ").replace("Sept.", "Sep")
+                )
                 for pattern in absolute_patterns:
                     try:
-                        return datetime.datetime.strptime(raw_date, pattern).replace(tzinfo=datetime.timezone.utc)
+                        return datetime.datetime.strptime(raw_date, pattern).replace(
+                            tzinfo=datetime.timezone.utc
+                        )
                     except ValueError:
                         continue
 
@@ -784,7 +875,15 @@ class BrainService:
             score -= 5
 
         if "united states" in normalized_query and not any(
-            marker in combined for marker in ("united states", "u.s.", "u.s ", "america", "american", "washington")
+            marker in combined
+            for marker in (
+                "united states",
+                "u.s.",
+                "u.s ",
+                "america",
+                "american",
+                "washington",
+            )
         ):
             score -= 8
 
@@ -796,7 +895,8 @@ class BrainService:
         normalized = self._normalize_web_search_query(query)
 
         if "united states" in normalized and any(
-            term in normalized for term in ("secretary of defense", "defense secretary", "defense")
+            term in normalized
+            for term in ("secretary of defense", "defense secretary", "defense")
         ):
             return (
                 "defense.gov",
@@ -825,19 +925,22 @@ class BrainService:
         """Pick the best candidate query and rank its results by relevance."""
         best_query = original_query
         best_results: List[Dict] = []
-        best_score = -10**9
+        best_score = -(10**9)
 
         for candidate in candidates:
             raw_results = candidate_results.get(candidate, [])
             ranked_with_scores = sorted(
-                ((self._score_search_result(candidate, item), item) for item in raw_results),
+                (
+                    (self._score_search_result(candidate, item), item)
+                    for item in raw_results
+                ),
                 key=lambda pair: pair[0],
                 reverse=True,
             )
             ranked = [item for score, item in ranked_with_scores if score > 0]
             if not ranked:
                 ranked = [item for _, item in ranked_with_scores[:1]]
-            top_score = ranked_with_scores[0][0] if ranked_with_scores else -10**9
+            top_score = ranked_with_scores[0][0] if ranked_with_scores else -(10**9)
             if top_score > best_score:
                 best_query = candidate
                 best_results = ranked
@@ -856,14 +959,19 @@ class BrainService:
             official_results = [
                 result
                 for result in results
-                if any(domain in str(result.get("href", "")).lower() for domain in preferred_domains)
+                if any(
+                    domain in str(result.get("href", "")).lower()
+                    for domain in preferred_domains
+                )
             ]
             if official_results:
                 return official_results[:4]
 
         return results[:8]
 
-    def _extract_relevant_text_window(self, text: str, query: str, max_chars: int = 1600) -> str:
+    def _extract_relevant_text_window(
+        self, text: str, query: str, max_chars: int = 1600
+    ) -> str:
         """Extract a compact passage centered around the most relevant search terms."""
         cleaned = re.sub(r"\s+", " ", text).strip()
         if not cleaned:
@@ -911,7 +1019,9 @@ class BrainService:
         excerpt = self._extract_relevant_text_window(html_text, query)
         return excerpt or None
 
-    async def _build_search_result_enrichment(self, query: str, results: List[Dict]) -> str:
+    async def _build_search_result_enrichment(
+        self, query: str, results: List[Dict]
+    ) -> str:
         """Fetch a couple of authoritative pages so the model sees live page text, not only snippets."""
         if not results:
             return ""
@@ -924,7 +1034,16 @@ class BrainService:
             if preferred_domains:
                 is_official = any(domain in href for domain in preferred_domains)
             else:
-                is_official = any(domain in href for domain in (".gov", ".mil", "defense.gov", "whitehouse.gov", "state.gov"))
+                is_official = any(
+                    domain in href
+                    for domain in (
+                        ".gov",
+                        ".mil",
+                        "defense.gov",
+                        "whitehouse.gov",
+                        "state.gov",
+                    )
+                )
 
             if is_official:
                 official_candidates.append(result)
@@ -946,9 +1065,7 @@ class BrainService:
                 continue
 
             title = str(result.get("title", href)).strip() or href
-            excerpts.append(
-                f"- {title}\n  {href}\n  {excerpt}"
-            )
+            excerpts.append(f"- {title}\n  {href}\n  {excerpt}")
 
         if not excerpts:
             return ""
@@ -964,18 +1081,42 @@ class BrainService:
 
         def _do_search():
             time_sensitive_keywords = {
-                "current", "latest", "news", "today", "now", "recent", "update",
-                "price", "value", "cost", "score", "winner", "result", "finance", "stock"
+                "current",
+                "latest",
+                "news",
+                "today",
+                "now",
+                "recent",
+                "update",
+                "price",
+                "value",
+                "cost",
+                "score",
+                "winner",
+                "result",
+                "finance",
+                "stock",
             }
             is_fresh = any(k in query.lower() for k in time_sensitive_keywords)
             time_limit = "w" if is_fresh else None
             candidate_results: Dict[str, List[Dict]] = {}
 
-            def _search_with_preferred_backends(ddgs: DDGS, candidate: str) -> List[Dict]:
+            def _search_with_preferred_backends(
+                ddgs: DDGS, candidate: str
+            ) -> List[Dict]:
                 search_attempts = [
-                    ("_text_html", {"region": "us-en", "timelimit": time_limit, "max_results": 8}),
-                    ("_text_lite", {"region": "us-en", "timelimit": time_limit, "max_results": 8}),
-                    ("_text_bing", {"region": "us-en", "timelimit": time_limit, "max_results": 8}),
+                    (
+                        "_text_html",
+                        {"region": "us-en", "timelimit": time_limit, "max_results": 8},
+                    ),
+                    (
+                        "_text_lite",
+                        {"region": "us-en", "timelimit": time_limit, "max_results": 8},
+                    ),
+                    (
+                        "_text_bing",
+                        {"region": "us-en", "timelimit": time_limit, "max_results": 8},
+                    ),
                 ]
 
                 for method_name, kwargs in search_attempts:
@@ -985,7 +1126,9 @@ class BrainService:
                     try:
                         results = list(method(candidate, **kwargs))
                     except Exception as exc:
-                        logger.warning(f"Search backend {method_name} failed for '{candidate}': {exc}")
+                        logger.warning(
+                            f"Search backend {method_name} failed for '{candidate}': {exc}"
+                        )
                         continue
                     if results:
                         return results
@@ -995,9 +1138,13 @@ class BrainService:
                 warnings.simplefilter("ignore", RuntimeWarning)
                 with DDGS(timeout=20) as ddgs:
                     for candidate in candidates[:3]:
-                        candidate_results[candidate] = _search_with_preferred_backends(ddgs, candidate)
+                        candidate_results[candidate] = _search_with_preferred_backends(
+                            ddgs, candidate
+                        )
 
-            best_query, best_results = self._select_search_results(query, candidates, candidate_results)
+            best_query, best_results = self._select_search_results(
+                query, candidates, candidate_results
+            )
             return best_query, best_results
 
         try:
@@ -1013,7 +1160,9 @@ class BrainService:
                 res_str += f" (best query: '{effective_query}')"
             res_str += ":\n\n"
             for i, r in enumerate(results):
-                res_str += f"{i+1}. **{r['title']}**\n   {r['href']}\n   {r['body']}\n\n"
+                res_str += (
+                    f"{i+1}. **{r['title']}**\n   {r['href']}\n   {r['body']}\n\n"
+                )
             if enrichment:
                 res_str += f"{enrichment}\n"
             return res_str
@@ -1031,7 +1180,9 @@ class BrainService:
     ) -> str:
         """Run web search in middleware, then ask the model to answer from results."""
         search_results = await self._run_web_search(search_query)
-        role_lookup = self._extract_current_role_lookup(user_input) or self._extract_current_role_lookup(search_query)
+        role_lookup = self._extract_current_role_lookup(
+            user_input
+        ) or self._extract_current_role_lookup(search_query)
         role_guidance = ""
         if role_lookup:
             role, entity = role_lookup
@@ -1116,7 +1267,7 @@ class BrainService:
             return quoted_match.group("path").strip()
 
         unquoted_match = re.search(
-            rf'(?P<path>/[^\n]+?\.(?:{ext_pattern}))(?=(?:\s|$|[.,;:!?]))',
+            rf"(?P<path>/[^\n]+?\.(?:{ext_pattern}))(?=(?:\s|$|[.,;:!?]))",
             user_input,
             re.IGNORECASE,
         )
@@ -1125,7 +1276,9 @@ class BrainService:
 
         return None
 
-    def _should_handoff_local_file_read(self, user_input: str, intent: Optional[str]) -> bool:
+    def _should_handoff_local_file_read(
+        self, user_input: str, intent: Optional[str]
+    ) -> bool:
         """Detect explicit local file requests that should bypass model tool indecision."""
         if intent != "file_operation":
             return False
@@ -1155,10 +1308,23 @@ class BrainService:
         normalized = re.sub(r"\s+", " ", user_input.lower()).strip()
         limit = settings.MAX_ATTACHMENT_TEXT_CHARS
 
-        if any(term in normalized for term in ("summarize", "summarise", "explain", "analyze", "analyse", "review")):
+        if any(
+            term in normalized
+            for term in (
+                "summarize",
+                "summarise",
+                "explain",
+                "analyze",
+                "analyse",
+                "review",
+            )
+        ):
             limit = 18000
 
-        if any(term in normalized for term in ("great detail", "detailed", "deep", "comprehensive")):
+        if any(
+            term in normalized
+            for term in ("great detail", "detailed", "deep", "comprehensive")
+        ):
             limit = 22000
 
         if path.lower().endswith(".pdf"):
@@ -1179,10 +1345,14 @@ class BrainService:
         file_text = await file_service.read_host_file(file_path, max_chars=char_limit)
 
         if not file_text:
-            return f"I couldn't read `{file_path}` because it wasn't found or was empty."
+            return (
+                f"I couldn't read `{file_path}` because it wasn't found or was empty."
+            )
 
         lowered = file_text.lower()
-        if lowered.startswith("error reading file:") or lowered.startswith("failed to extract text from pdf:"):
+        if lowered.startswith("error reading file:") or lowered.startswith(
+            "failed to extract text from pdf:"
+        ):
             return file_text
 
         handoff_messages = messages + [
@@ -1220,18 +1390,18 @@ class BrainService:
         return response.json().get("message", {}).get("content", "").strip()
 
     async def think(
-        self, 
-        user_input: str, 
-        conversation_id: str, 
+        self,
+        user_input: str,
+        conversation_id: str,
         user_id: int,
-        model_id: Optional[str] = None, 
+        model_id: Optional[str] = None,
         reasoning_mode: Optional[str] = None,
         imagine_model: Optional[str] = None,
         attachments: Optional[List[dict]] = None,
         progress_callback: Optional[ProgressCallback] = None,
     ) -> str:
         """Processes user input, handles tool calls, and returns a response.
-        
+
         Key design: Each conversation is isolated. Vector memories from OTHER
         conversations are only used as very light background context, never as
         instructions to act upon.
@@ -1243,8 +1413,10 @@ class BrainService:
             detail="Persisting the user turn before building context.",
         )
         # 1. Save current user message to DB first so it's part of context
-        user_msg = await memory_service.add_message(conversation_id, "user", user_input, attachments=attachments)
-        
+        user_msg = await memory_service.add_message(
+            conversation_id, "user", user_input, attachments=attachments
+        )
+
         # 2. Retrieve updated context
         await self._emit_progress(
             progress_callback,
@@ -1294,7 +1466,7 @@ class BrainService:
         configured_model = self._resolve_requested_model(model_id)
         target_model = configured_model
         active_imagine_model = imagine_model or settings.ACTIVE_IMAGINE_MODEL
-        
+
         # Determine if this is a generation request (to avoid switching to vision model which can't call tools)
         lower_input = user_input.lower()
         is_generation_request = self._is_image_generation_request(user_input)
@@ -1305,7 +1477,9 @@ class BrainService:
             vision_trigger = {"describe", "see", "what", "analyze", "explain", "look"}
             if any(v in lower_input for v in vision_trigger):
                 target_model = settings.VISION_MODEL
-                logger.info("Vision task detected — switching brain to specialized eyes.")
+                logger.info(
+                    "Vision task detected — switching brain to specialized eyes."
+                )
                 await self._emit_progress(
                     progress_callback,
                     "status",
@@ -1331,12 +1505,14 @@ class BrainService:
                 label="Saving the reply",
                 detail="Persisting the assistant response.",
             )
-            await self._store_assistant_turn(conversation_id, user_id, user_msg.id, user_input, ai_message)
+            await self._store_assistant_turn(
+                conversation_id, user_id, user_msg.id, user_input, ai_message
+            )
             return ai_message
 
         if imagine_model:
-             current_system_prompt += f"\n[USER PREFERENCE]: When generating images, you MUST use the '{imagine_model}' model via the `generate_image` tool."
-        
+            current_system_prompt += f"\n[USER PREFERENCE]: When generating images, you MUST use the '{imagine_model}' model via the `generate_image` tool."
+
         # Strengthen the core image generation directive right before the history
         if is_generation_request:
             current_system_prompt += (
@@ -1348,7 +1524,7 @@ class BrainService:
                 "DO NOT use digital-art words like '3d render' or 'illustration'. "
                 "Just call the 'generate_image' tool with your expanded, technical photographic prompt."
             )
-        
+
         # Inject context about uploaded images (for Img2Img)
         if context_bundle.current_image_paths:
             img_instructions = (
@@ -1359,7 +1535,9 @@ class BrainService:
                 img_instructions += f"- {path}\n"
             current_system_prompt += img_instructions
 
-        messages = [{"role": "system", "content": current_system_prompt}] + context_bundle.recent_messages
+        messages = [
+            {"role": "system", "content": current_system_prompt}
+        ] + context_bundle.recent_messages
 
         # 5. Request routing
         await self._emit_progress(
@@ -1372,7 +1550,11 @@ class BrainService:
         intent = routing_decision.intent
         filtered_tools = self.router.filter_tools(self.tools, routing_decision)
         include_tools = len(filtered_tools) > 0
-        file_handoff_path = self._extract_local_file_path(user_input) if self._should_handoff_local_file_read(user_input, intent) else None
+        file_handoff_path = (
+            self._extract_local_file_path(user_input)
+            if self._should_handoff_local_file_read(user_input, intent)
+            else None
+        )
 
         if include_tools:
             logger.info(
@@ -1389,7 +1571,6 @@ class BrainService:
                 routing_decision.reason,
             )
 
-
         try:
             request_timeout = self._ollama_request_timeout(include_tools)
             logger.info(
@@ -1400,7 +1581,9 @@ class BrainService:
             )
             async with httpx.AsyncClient(timeout=request_timeout) as client:
                 if file_handoff_path:
-                    logger.info(f"Using local file handoff for explicit path request: {file_handoff_path}")
+                    logger.info(
+                        f"Using local file handoff for explicit path request: {file_handoff_path}"
+                    )
                     await self._emit_progress(
                         progress_callback,
                         "status",
@@ -1420,7 +1603,9 @@ class BrainService:
                         label="Saving the reply",
                         detail="Persisting the assistant response.",
                     )
-                    await self._store_assistant_turn(conversation_id, user_id, user_msg.id, user_input, ai_message)
+                    await self._store_assistant_turn(
+                        conversation_id, user_id, user_msg.id, user_input, ai_message
+                    )
                     return ai_message
 
                 orchestration = await self.tool_orchestrator.run(
@@ -1451,18 +1636,31 @@ class BrainService:
                         label="Saving the reply",
                         detail="Persisting the assistant response.",
                     )
-                    await self._store_assistant_turn(conversation_id, user_id, user_msg.id, user_input, ai_message)
+                    await self._store_assistant_turn(
+                        conversation_id, user_id, user_msg.id, user_input, ai_message
+                    )
                     return ai_message
 
                 final_answer = orchestration.final_answer
-                search_handoff_query = self._extract_explicit_web_search_signal(final_answer, user_input)
-                if not search_handoff_query and self._should_enforce_web_search_contract(intent, orchestration):
-                    logger.info("Enforcing web search contract because the routed request returned without search results.")
+                search_handoff_query = self._extract_explicit_web_search_signal(
+                    final_answer, user_input
+                )
+                if (
+                    not search_handoff_query
+                    and self._should_enforce_web_search_contract(intent, orchestration)
+                ):
+                    logger.info(
+                        "Enforcing web search contract because the routed request returned without search results."
+                    )
                     search_handoff_query = user_input
                 elif not search_handoff_query:
-                    search_handoff_query = self._extract_web_search_signal(final_answer, user_input)
+                    search_handoff_query = self._extract_web_search_signal(
+                        final_answer, user_input
+                    )
                 if search_handoff_query:
-                    logger.info(f"Model requested middleware web search handoff for query: {search_handoff_query}")
+                    logger.info(
+                        f"Model requested middleware web search handoff for query: {search_handoff_query}"
+                    )
                     await self._emit_progress(
                         progress_callback,
                         "status",
@@ -1492,7 +1690,9 @@ class BrainService:
                     label="Saving the reply",
                     detail="Persisting the assistant response.",
                 )
-                await self._store_assistant_turn(conversation_id, user_id, user_msg.id, user_input, ai_message)
+                await self._store_assistant_turn(
+                    conversation_id, user_id, user_msg.id, user_input, ai_message
+                )
                 return ai_message
 
         except httpx.ReadTimeout:
@@ -1546,7 +1746,9 @@ class BrainService:
         progress_callback: Optional[ProgressCallback] = None,
     ) -> str:
         if orchestration.image_generation_result:
-            logger.info("Using direct generate_image tool result for the final image reply.")
+            logger.info(
+                "Using direct generate_image tool result for the final image reply."
+            )
             return orchestration.image_generation_result.strip()
 
         logger.warning(
@@ -1580,8 +1782,12 @@ class BrainService:
         assistant_response: str,
     ) -> None:
         """Persist the assistant reply and the user turn for long-term memory."""
-        await memory_service.add_message(conversation_id, "assistant", assistant_response)
-        await vector_service.add_memory(user_input, user_id, user_message_id, conversation_id)
+        await memory_service.add_message(
+            conversation_id, "assistant", assistant_response
+        )
+        await vector_service.add_memory(
+            user_input, user_id, user_message_id, conversation_id
+        )
 
     def _is_model_status_query(self, user_input: str) -> bool:
         """Detect questions asking which model Bipod is currently using."""
@@ -1634,22 +1840,28 @@ class BrainService:
                             name = model.get("name")
                             logger.info(f"Unloading model '{name}'...")
                             await u_client.post(
-                                f"{self.base_url}/api/generate", 
-                                json={"model": name, "keep_alive": 0}
+                                f"{self.base_url}/api/generate",
+                                json={"model": name, "keep_alive": 0},
                             )
                         if not running:
                             logger.info("Ollama reports no models currently in VRAM.")
                     else:
                         raise Exception(f"PS endpoint returned {ps_resp.status_code}")
                 except Exception as ps_e:
-                    logger.warning(f"Could not query running models ({ps_e}), falling back to default list.")
+                    logger.warning(
+                        f"Could not query running models ({ps_e}), falling back to default list."
+                    )
                     # Fallback: Unload the usual suspects
-                    for m in [self.active_model, settings.VISION_MODEL, settings.EMBEDDING_MODEL]:
+                    for m in [
+                        self.active_model,
+                        settings.VISION_MODEL,
+                        settings.EMBEDDING_MODEL,
+                    ]:
                         await u_client.post(
-                            f"{self.base_url}/api/generate", 
-                            json={"model": m, "keep_alive": 0}
+                            f"{self.base_url}/api/generate",
+                            json={"model": m, "keep_alive": 0},
                         )
-                
+
                 # Small delay to allow Ollama process to actually release handles
                 await asyncio.sleep(1)
         except Exception as e:
@@ -1661,60 +1873,84 @@ class BrainService:
             async with httpx.AsyncClient(timeout=90.0) as v_client:
                 payload = {
                     "model": settings.VISION_MODEL,
-                    "messages": [{"role": "user", "content": prompt, "images": [image_b64]}],
-                    "stream": False
+                    "messages": [
+                        {"role": "user", "content": prompt, "images": [image_b64]}
+                    ],
+                    "stream": False,
                 }
-                response = await v_client.post(f"{self.base_url}/api/chat", json=payload)
+                response = await v_client.post(
+                    f"{self.base_url}/api/chat", json=payload
+                )
                 response.raise_for_status()
-                return response.json().get("message", {}).get("content", "I saw the image but couldn't think of anything to say.")
+                return (
+                    response.json()
+                    .get("message", {})
+                    .get(
+                        "content",
+                        "I saw the image but couldn't think of anything to say.",
+                    )
+                )
         except Exception as e:
             logger.error(f"Vision tool failure: {e}")
             return f"Error analyzing image: {str(e)}"
 
-    async def _generate_image_request(self, prompt: str, model_type: str = "sdxl-lightning", image_path: Optional[str] = None) -> str:
+    async def _generate_image_request(
+        self,
+        prompt: str,
+        model_type: str = "sdxl-lightning",
+        image_path: Optional[str] = None,
+    ) -> str:
         """Internal helper to call the Imagine service."""
         try:
             # 1. First, tell Ollama to get out of the GPU
             await self._unload_ollama()
 
-            logger.info(f"Requesting image generation: '{prompt}' via {model_type} (Img2Img: {bool(image_path)})")
+            logger.info(
+                f"Requesting image generation: '{prompt}' via {model_type} (Img2Img: {bool(image_path)})"
+            )
             # Increase timeout to 10 minutes: first-run model download is ~4GB
             async with httpx.AsyncClient(timeout=600.0) as client:
                 payload = {
                     "prompt": prompt,
                     "model_type": model_type,
-                    "steps": 40 # Upgraded quality
+                    "steps": 40,  # Upgraded quality
                 }
-                
+
                 # If image_path is provided, read and encode it for Img2Img
                 if image_path:
                     try:
                         with open(image_path, "rb") as f:
                             encoded_img = base64.b64encode(f.read()).decode("utf-8")
                         payload["image"] = encoded_img
-                        logger.info(f"Attaching image from {image_path} for generation.")
+                        logger.info(
+                            f"Attaching image from {image_path} for generation."
+                        )
                     except Exception as e:
-                        logger.warning(f"Failed to read image for Img2Img: {e}. Falling back to Text2Img.")
+                        logger.warning(
+                            f"Failed to read image for Img2Img: {e}. Falling back to Text2Img."
+                        )
 
-                response = await client.post(f"{settings.IMAGINE_API_URL}/generate", json=payload)
+                response = await client.post(
+                    f"{settings.IMAGINE_API_URL}/generate", json=payload
+                )
                 response.raise_for_status()
                 data = response.json()
-                
+
                 if data.get("status") == "success":
                     # Decode and save to file
                     img_data = base64.b64decode(data["image_base64"])
                     filename = f"generated_{uuid.uuid4().hex[:8]}.jpg"
-                    
+
                     # Save to Bipod's generated directory
                     # We use file_service logic manually here to access the path
                     filepath = os.path.join(settings.GENERATED_DIR, filename)
                     with open(filepath, "wb") as f:
                         f.write(img_data)
-                        
+
                     logger.info(f"Generated image saved to {filepath}")
                     return f"Image generated successfully! Saved to: {filepath}\n\n![Generated Image](/generated/{filename})"
                 else:
-                   return f"Generation failed: {data}"
+                    return f"Generation failed: {data}"
 
         except httpx.HTTPStatusError as e:
             status_code = e.response.status_code if e.response else "unknown"
@@ -1755,7 +1991,9 @@ class BrainService:
             f"Current negative prompt: {negative_prompt or '(empty)'}"
         )
 
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(
+            timeout=self._ollama_request_timeout(include_tools=False)
+        ) as client:
             response = await client.post(
                 f"{self.base_url}/api/chat",
                 json={
@@ -1778,7 +2016,9 @@ class BrainService:
             parsed = json.loads(match.group(0)) if match else {}
 
         improved_prompt = str(parsed.get("prompt") or prompt).strip()
-        improved_negative = str(parsed.get("negative_prompt") or negative_prompt or "").strip()
+        improved_negative = str(
+            parsed.get("negative_prompt") or negative_prompt or ""
+        ).strip()
         return {
             "prompt": improved_prompt,
             "negative_prompt": improved_negative,
@@ -1787,19 +2027,19 @@ class BrainService:
     async def _map_reduce_summarize(self, text: str) -> str:
         """Summarizes large text chunks using a Map-Reduce approach."""
         chunk_size = 25000
-        chunks = [text[i:i + chunk_size] for i in range(0, len(text), chunk_size)]
-        
+        chunks = [text[i : i + chunk_size] for i in range(0, len(text), chunk_size)]
+
         if len(chunks) == 1:
             # Just a simple summary for one chunk
             return await self._summarize_chunk(chunks[0])
-            
+
         logger.info(f"Summarizing {len(chunks)} chunks via Map-Reduce...")
         summaries = []
         for i, chunk in enumerate(chunks):
             logger.info(f"Mapping chunk {i+1}/{len(chunks)}...")
             summary = await self._summarize_chunk(chunk)
             summaries.append(summary)
-            
+
         final_text = "\n\n".join(summaries)
         return await self._summarize_chunk(final_text, is_final=True)
 
@@ -1814,18 +2054,20 @@ class BrainService:
             if is_final:
                 prompt = "Synthesize the following summaries into a final, coherent overview. Preserve all technical specifics."
 
-            async with httpx.AsyncClient(timeout=60.0) as client:
+            async with httpx.AsyncClient(
+                timeout=self._ollama_request_timeout(include_tools=False)
+            ) as client:
                 response = await client.post(
                     f"{self.base_url}/api/chat",
                     json={
                         "model": settings.ACTIVE_MODEL,
                         "messages": [
                             {"role": "system", "content": prompt},
-                            {"role": "user", "content": text}
+                            {"role": "user", "content": text},
                         ],
                         "stream": False,
                         "options": self._ollama_options(),
-                    }
+                    },
                 )
                 response.raise_for_status()
                 return response.json()["message"]["content"]
@@ -1833,42 +2075,50 @@ class BrainService:
             logger.error(f"Summarization failed: {e}")
             return text[:1000] + "... [Summary failed]"
 
-    def _check_for_hallucinated_tools(self, content: str, allowed_tools: set[str] | None = None) -> tuple[List[Dict], str]:
+    def _check_for_hallucinated_tools(
+        self, content: str, allowed_tools: set[str] | None = None
+    ) -> tuple[List[Dict], str]:
         """Detects tool calls that the model output as plain text JSON instead of real tool_calls.
         Only strips blocks that are successfully identified as internal tool calls.
         """
         cleaned_content = content
         all_tool_names = {t["function"]["name"] for t in self.tools}
         valid_tools = allowed_tools if allowed_tools else all_tool_names
-        
+
         tool_calls = []
-        strip_ranges = [] # Track where internal content was found to strip it later
-        
+        strip_ranges = []  # Track where internal content was found to strip it later
+
         # 1. Strip specific internal model tags that should NEVER be seen
         internal_markers = ["<|python_tag|>", "<|action_tag|>", "<|thought|>"]
         for marker in internal_markers:
             for m in re.finditer(re.escape(marker), cleaned_content):
                 strip_ranges.append((m.start(), m.end()))
-        
+
         # 2. Extract JSON blocks using brace-counting
         start_idx = -1
         brace_count = 0
-        
+
         for i, char in enumerate(cleaned_content):
-            if char == '{':
+            if char == "{":
                 if brace_count == 0:
                     start_idx = i
                 brace_count += 1
-            elif char == '}':
+            elif char == "}":
                 brace_count -= 1
                 if brace_count == 0 and start_idx != -1:
-                    potential_json = cleaned_content[start_idx:i+1]
-                    
+                    potential_json = cleaned_content[start_idx : i + 1]
+
                     try:
                         data = json.loads(potential_json)
-                        fn_name = data.get("name") or data.get("function", {}).get("name")
-                        args = data.get("parameters") or data.get("arguments") or data.get("function", {}).get("arguments")
-                        
+                        fn_name = data.get("name") or data.get("function", {}).get(
+                            "name"
+                        )
+                        args = (
+                            data.get("parameters")
+                            or data.get("arguments")
+                            or data.get("function", {}).get("arguments")
+                        )
+
                         # Alias 'cmd' to 'command' for shell tool
                         if fn_name == "shell" and args and "cmd" in args:
                             args["command"] = args.pop("cmd")
@@ -1876,110 +2126,201 @@ class BrainService:
                         # Strip if it LOOKS like a tool call (has both 'name' AND 'arguments'/'parameters')
                         # This catches real tools AND completely hallucinated ones (e.g. 'generate_story')
                         # but avoids stripping random JSON data that just has a 'name' key
-                        is_tool_shaped = fn_name and (args is not None or "arguments" in data or "parameters" in data)
+                        is_tool_shaped = fn_name and (
+                            args is not None
+                            or "arguments" in data
+                            or "parameters" in data
+                        )
                         if is_tool_shaped:
                             # Also try to strip surrounding backticks if present
                             current_start = start_idx
                             current_end = i + 1
-                            
-                            pre = cleaned_content[max(0, current_start-10):current_start]
-                            post = cleaned_content[current_end:min(len(cleaned_content), current_end+11)]
-                            
+
+                            pre = cleaned_content[
+                                max(0, current_start - 10) : current_start
+                            ]
+                            post = cleaned_content[
+                                current_end : min(
+                                    len(cleaned_content), current_end + 11
+                                )
+                            ]
+
                             if "```json" in pre:
-                                current_start = cleaned_content.rfind("```json", 0, current_start)
+                                current_start = cleaned_content.rfind(
+                                    "```json", 0, current_start
+                                )
                             elif "```" in pre:
-                                current_start = cleaned_content.rfind("```", 0, current_start)
-                            
+                                current_start = cleaned_content.rfind(
+                                    "```", 0, current_start
+                                )
+
                             if "```" in post:
                                 # Find the closing backticks after the JSON block
-                                closing_backticks_idx = cleaned_content.find("```", current_end)
+                                closing_backticks_idx = cleaned_content.find(
+                                    "```", current_end
+                                )
                                 if closing_backticks_idx != -1:
-                                    current_end = closing_backticks_idx + 3 # Include the '```'
-                            
+                                    current_end = (
+                                        closing_backticks_idx + 3
+                                    )  # Include the '```'
+
                             # Aggressively strip surrounding characters that common models leak (stray braces, backticks, newlines)
-                            while current_start > 0 and cleaned_content[current_start-1] in [" ", "\n", "\r", "}", "]", "`", ":", ","]:
+                            while current_start > 0 and cleaned_content[
+                                current_start - 1
+                            ] in [" ", "\n", "\r", "}", "]", "`", ":", ","]:
                                 current_start -= 1
-                            while current_end < len(cleaned_content) and cleaned_content[current_end] in [" ", "\n", "\r", "{", "[", "`", ":", ","]:
+                            while current_end < len(
+                                cleaned_content
+                            ) and cleaned_content[current_end] in [
+                                " ",
+                                "\n",
+                                "\r",
+                                "{",
+                                "[",
+                                "`",
+                                ":",
+                                ",",
+                            ]:
                                 current_end += 1
 
                             strip_ranges.append((current_start, current_end))
 
                             if fn_name in valid_tools:
-                                tool_calls.append({
-                                    "id": f"call_{os.urandom(4).hex()}",
-                                    "type": "function",
-                                    "function": {
-                                        "name": fn_name,
-                                        "arguments": args
+                                tool_calls.append(
+                                    {
+                                        "id": f"call_{os.urandom(4).hex()}",
+                                        "type": "function",
+                                        "function": {
+                                            "name": fn_name,
+                                            "arguments": args,
+                                        },
                                     }
-                                })
+                                )
                             elif fn_name in all_tool_names:
-                                logger.warning(f"Blocked hallucinated call to '{fn_name}' — not in allowed tool set.")
+                                logger.warning(
+                                    f"Blocked hallucinated call to '{fn_name}' — not in allowed tool set."
+                                )
                             else:
-                                logger.warning(f"Stripped completely fake tool call: '{fn_name}' — tool does not exist.")
+                                logger.warning(
+                                    f"Stripped completely fake tool call: '{fn_name}' — tool does not exist."
+                                )
                     except:
                         # 2b. Attempt to recover malformed JSON for known tools (LLMs often output broken JSON)
                         # Regex to find "name": "something" pattern
                         name_match = re.search(r'"name"\s*:\s*"(\w+)"', potential_json)
                         if name_match:
                             found_name = name_match.group(1)
-                            
+
                             # SAFETY: Only strip if it looks like a tool call (has args key) OR is a known tool
                             # This prevents stripping `{"name": "John"}` in normal code
-                            has_args_key = "arguments" in potential_json or "parameters" in potential_json
+                            has_args_key = (
+                                "arguments" in potential_json
+                                or "parameters" in potential_json
+                            )
                             is_known_tool = found_name in all_tool_names
-                            
+
                             if has_args_key or is_known_tool:
                                 # Determine range to strip (same logic as above)
                                 current_start = start_idx
                                 current_end = i + 1
                                 # Expand to surrounding backticks
-                                pre = cleaned_content[max(0, current_start-10):current_start]
-                                if "```json" in pre: current_start = cleaned_content.rfind("```json", 0, current_start)
-                                elif "```" in pre: current_start = cleaned_content.rfind("```", 0, current_start)
-                                
-                                post = cleaned_content[current_end:min(len(cleaned_content), current_end+11)]
+                                pre = cleaned_content[
+                                    max(0, current_start - 10) : current_start
+                                ]
+                                if "```json" in pre:
+                                    current_start = cleaned_content.rfind(
+                                        "```json", 0, current_start
+                                    )
+                                elif "```" in pre:
+                                    current_start = cleaned_content.rfind(
+                                        "```", 0, current_start
+                                    )
+
+                                post = cleaned_content[
+                                    current_end : min(
+                                        len(cleaned_content), current_end + 11
+                                    )
+                                ]
                                 if "```" in post:
                                     cb_idx = cleaned_content.find("```", current_end)
-                                    if cb_idx != -1: current_end = cb_idx + 3
+                                    if cb_idx != -1:
+                                        current_end = cb_idx + 3
 
                                 # Aggressively strip surrounding characters that common models leak (stray braces, backticks, newlines)
-                                while current_start > 0 and cleaned_content[current_start-1] in [" ", "\n", "\r", "}", "]", "`", ":", ","]:
+                                while current_start > 0 and cleaned_content[
+                                    current_start - 1
+                                ] in [" ", "\n", "\r", "}", "]", "`", ":", ","]:
                                     current_start -= 1
-                                while current_end < len(cleaned_content) and cleaned_content[current_end] in [" ", "\n", "\r", "{", "[", "`", ":", ","]:
+                                while current_end < len(
+                                    cleaned_content
+                                ) and cleaned_content[current_end] in [
+                                    " ",
+                                    "\n",
+                                    "\r",
+                                    "{",
+                                    "[",
+                                    "`",
+                                    ":",
+                                    ",",
+                                ]:
                                     current_end += 1
 
                                 # ALWAYS strip the broken tool-like JSON
                                 strip_ranges.append((current_start, current_end))
-                                
+
                                 # RECOVERY: specialized fix for No-Arg tools like get_system_info
                                 found_name_valid = found_name in valid_tools
                                 if found_name == "get_system_info" and found_name_valid:
-                                    logger.info("Recovered malformed JSON for get_system_info")
-                                    tool_calls.append({
-                                        "id": f"call_{os.urandom(4).hex()}",
-                                        "type": "function",
-                                        "function": {"name": "get_system_info", "arguments": {}}
-                                    })
+                                    logger.info(
+                                        "Recovered malformed JSON for get_system_info"
+                                    )
+                                    tool_calls.append(
+                                        {
+                                            "id": f"call_{os.urandom(4).hex()}",
+                                            "type": "function",
+                                            "function": {
+                                                "name": "get_system_info",
+                                                "arguments": {},
+                                            },
+                                        }
+                                    )
                                 elif found_name_valid:
                                     # RECOVERY: specialized fix for shell commands with broken JSON
                                     if found_name == "execute_system_command":
-                                        cmd_match = re.search(r'["\'](?:command|cmd)["\']\s*:\s*["\'](.*?)["\']', potential_json)
+                                        cmd_match = re.search(
+                                            r'["\'](?:command|cmd)["\']\s*:\s*["\'](.*?)["\']',
+                                            potential_json,
+                                        )
                                         if cmd_match:
-                                            logger.info("Recovered malformed JSON for execute_system_command")
-                                            tool_calls.append({
-                                                "id": f"call_{os.urandom(4).hex()}",
-                                                "type": "function",
-                                                "function": {"name": "execute_system_command", "arguments": {"command": cmd_match.group(1)}}
-                                            })
+                                            logger.info(
+                                                "Recovered malformed JSON for execute_system_command"
+                                            )
+                                            tool_calls.append(
+                                                {
+                                                    "id": f"call_{os.urandom(4).hex()}",
+                                                    "type": "function",
+                                                    "function": {
+                                                        "name": "execute_system_command",
+                                                        "arguments": {
+                                                            "command": cmd_match.group(
+                                                                1
+                                                            )
+                                                        },
+                                                    },
+                                                }
+                                            )
                                             continue
-                                            
-                                    logger.warning(f"Detected malformed JSON for '{found_name}' — cannot execute safely.")
+
+                                    logger.warning(
+                                        f"Detected malformed JSON for '{found_name}' — cannot execute safely."
+                                    )
                                 else:
-                                    logger.warning(f"Stripped hallucinated/malformed tool: '{found_name}'")
+                                    logger.warning(
+                                        f"Stripped hallucinated/malformed tool: '{found_name}'"
+                                    )
 
                     start_idx = -1
-        
+
         # 3. Extract Function-like calls: tool_name("arg")
         func_pattern = r'(\w+)\((?:arguments=)?(\{.*?\}|"(.*?)")\)'
         for match in re.finditer(func_pattern, cleaned_content):
@@ -1993,29 +2334,33 @@ class BrainService:
 
                 if fname in valid_tools:
                     final_args = {}
-                    if raw_args.startswith('{'):
-                        try: final_args = json.loads(raw_args)
-                        except: continue
+                    if raw_args.startswith("{"):
+                        try:
+                            final_args = json.loads(raw_args)
+                        except:
+                            continue
                     elif str_arg:
-                        if fname == "execute_system_command": final_args = {"command": str_arg}
-                        elif fname == "read_file": final_args = {"path": str_arg}
-                        elif fname == "search_files": final_args = {"pattern": str_arg}
-                    
-                    tool_calls.append({
-                        "id": f"call_{os.urandom(4).hex()}",
-                        "type": "function",
-                        "function": {
-                            "name": fname,
-                            "arguments": final_args
+                        if fname == "execute_system_command":
+                            final_args = {"command": str_arg}
+                        elif fname == "read_file":
+                            final_args = {"path": str_arg}
+                        elif fname == "search_files":
+                            final_args = {"pattern": str_arg}
+
+                    tool_calls.append(
+                        {
+                            "id": f"call_{os.urandom(4).hex()}",
+                            "type": "function",
+                            "function": {"name": fname, "arguments": final_args},
                         }
-                    })
+                    )
 
         # 4. Strip ONLY the identified internal blocks
         final_text = cleaned_content
         # Sort and merge overlapping ranges to avoid double-stripping issues
         if not strip_ranges:
             return tool_calls, final_text.strip()
-            
+
         strip_ranges.sort(key=lambda x: x[0])
         merged = []
         if strip_ranges:
@@ -2030,7 +2375,8 @@ class BrainService:
 
         for start, end in reversed(merged):
             final_text = final_text[:start] + final_text[end:]
-            
+
         return tool_calls, final_text.strip()
+
 
 brain_service = BrainService()
